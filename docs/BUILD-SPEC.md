@@ -1188,8 +1188,17 @@ discover late.
 22. **`_D` has 7 fractional digits on `LogMatchDefinition`.** Python's `%f` accepts 6 and raises.
 23. **The array is not strictly time-sorted, and the last element is not `LogMatchEnd`.**
 24. **`blueZoneCustomOptions` is a JSON *string*** requiring a second parse (`"[]"` in our corpus).
-25. **`LogParachuteLanding.distance` is `0` in all 61 archived matches.** Derive landing spots from
-    the event's `location`, never from `distance`.
+25. ~~**`LogParachuteLanding.distance` is `0` in all 61 archived matches.**~~ **FALSE — corrected
+    2026-07-22.** Measured over the 65-match corpus, `distance` is a real float in 1,429 of 1,430
+    sampled events (4.7 to 2,391.7); only 27 of 8,198 are integer `0`.
+    The claim came from misreading `telemetry-observed-schema.md`, whose generator collected enum
+    candidates from strings/bools/ints **only** — floats were counted in `types` but never in
+    `values`, so a 99.7%-float field rendered as `` `0` `` and read as a constant. 219 fields were
+    affected the same way, including `common.isGame` (213,056 hidden floats — the very values that
+    gotcha #21 is about). `scripts/extract_schema.py` now prints
+    "plus N non-enumerated (float) value(s)" so a value list can never again pass for a full range.
+    *Still derive landing spots from the event's `location`* — it is the authoritative position and
+    `distance` is a scalar, not a coordinate. The advice was right; the stated reason was not.
 26. **`redZoneRadius`/`blackZoneRadius` are `0` in all 61 archived matches.** Ship the code paths,
     do not ship a UI that assumes they exist.
 27. **Event names: `LogItemPickupFromLootBox` (capital B), `LogItemPickupFromCarepackage`,

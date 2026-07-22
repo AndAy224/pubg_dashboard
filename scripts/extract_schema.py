@@ -35,13 +35,25 @@ MAX_DEPTH = 6
 
 
 class FieldStat:
-    __slots__ = ("count", "types", "values", "overflow")
+    __slots__ = ("count", "types", "values", "overflow", "unenumerated")
 
     def __init__(self) -> None:
         self.count = 0
         self.types: Counter[str] = Counter()
         self.values: Counter[str] = Counter()
         self.overflow = False
+        # Scalars deliberately not collected as enum candidates — floats. This
+        # count is load-bearing for honesty, not decoration: without it a field
+        # that is 99.9% float and 0.1% integer zero renders as `0`, reading as
+        # "the only value ever observed is 0".
+        #
+        # That is not hypothetical. It is what made
+        # `LogParachuteLanding.distance` look like a constant 0 and produced
+        # BUILD-SPEC gotcha #25 ("distance is 0 in all 61 archived matches"),
+        # which is false — 1,429 of 1,430 sampled events carry a real float
+        # distance. A doc that silently drops the majority of its evidence is
+        # exactly the silent-wrongness this corpus exists to prevent.
+        self.unenumerated = 0
 
     def observe(self, value: object) -> None:
         self.count += 1
@@ -58,6 +70,10 @@ class FieldStat:
                     if len(self.values) > MAX_DISTINCT:
                         self.overflow = True
                         self.values.clear()
+                else:
+                    self.unenumerated += 1
+        elif isinstance(value, float):
+            self.unenumerated += 1
 
 
 def walk(obj: object, prefix: str, out: dict[str, FieldStat], depth: int = 0) -> None:
@@ -156,6 +172,9 @@ def main() -> None:
                     "presence": round(fs.count / event_counts[t], 4),
                     "types": dict(fs.types),
                     "values": dict(fs.values.most_common(MAX_DISTINCT)) if not fs.overflow else "<high-cardinality>",
+                    # How many observations `values` does NOT account for.
+                    # Non-zero means `values` is a sample, never the range.
+                    "unenumerated": fs.unenumerated,
                 }
                 for path, fs in sorted(fields.items())
             }
@@ -236,6 +255,14 @@ def main() -> None:
                 vals = ", ".join(f"`{v}`" for v in shown)
                 if len(fs.values) > 12:
                     vals += f", … (+{len(fs.values)-12})"
+                # Never let an enumerated minority stand in for the whole field.
+                if fs.unenumerated:
+                    vals += (
+                        f" — **plus {fs.unenumerated:,} non-enumerated "
+                        f"(float) value(s); this list is NOT the full range**"
+                    )
+            elif fs.unenumerated:
+                vals = f"*(all {fs.unenumerated:,} values are floats, not enumerated)*"
             else:
                 vals = ""
             flag = "" if presence >= 0.999 else " ⚠️"
