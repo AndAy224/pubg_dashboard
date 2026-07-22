@@ -5,6 +5,14 @@ workstation to the Ubuntu deploy server. If you are the next agent picking this
 up: **read this file, then `docs/BUILD-SPEC.md`, then start at "What to do
 next".**
 
+> **Updated 2026-07-22, later the same day, on the Ubuntu server.**
+> Phase 1 is now integrated and runs end to end. Nine defects were found by
+> executing it — every one at a module boundary, invisible to imports and to
+> the tests. Sections 3, 5 and 8 are rewritten; the rest still stands.
+> The corpus was re-archived here and is now **65 matches**, not 61, so the
+> oracle numbers in §8 changed. See §10 for what is verified and §11 for what
+> is still missing.
+
 ---
 
 ## 1. What this project is
@@ -57,32 +65,42 @@ Keep doing that. When you need a fact about the API, query the corpus first.
   frontend tree, 34 gotchas, 9 open questions
 - `backend/pyproject.toml`, `config.py`, `db/models.py` — the contract
 
-### Written but NOT reviewed, NOT integrated, NOT run
-The Phase 1 build workflow was interrupted partway. These files exist and are
-plausible but **no integration pass ever ran, so imports and signatures across
-modules were never reconciled**:
+### Phase 1 — now integrated and run  *(was: "written but never run")*
 
-```
-backend/pubg_dashboard/pubg/{client,ratelimit,errors,schemas}.py
-backend/pubg_dashboard/storage/{base,minio,filesystem,factory}.py
-backend/pubg_dashboard/queue/{jobs,worker}.py
-backend/pubg_dashboard/ingest/{upsert,poller,handlers,importer,ports,queue}.py
-backend/pubg_dashboard/db/session.py
-backend/pubg_dashboard/cli.py
-backend/tests/{conftest,test_ratelimit,test_schemas}.py
-```
+The integration pass has happened. `uv run pytest -q` is **636 passed, 1
+skipped**, every module imports, and the whole pipeline has been exercised
+against real Postgres and the live API. See §10.
 
-Note `ingest/queue.py` **and** `queue/jobs.py` both exist — two agents likely
-solved the same problem. Reconcile them; don't assume either is correct.
+`ingest/queue.py` and `queue/jobs.py` do both still exist, and the duplication
+is real, but it was **measured, not assumed**: both build the same
+`{kind}:{ident}` dedupe key and both dedupe correctly against the partial
+unique index, so they interoperate. `queue/jobs.py` owns the full lifecycle
+(claim/complete/fail/reap); `ingest/queue.py` owns bulk enqueue, which is
+genuinely better for the poller (one statement for N matches instead of N).
+Consolidating them is tidy-up, **not** a correctness fix — `tests/test_queue.py`
+pins the behaviour of both first.
 
-Missing: `tests/test_upsert.py`, `test_client.py`, `test_storage.py`,
-`logging.py`, `backend/README.md`, and the Alembic migration (see below).
+Still missing: `tests/test_upsert.py`, `test_client.py`, `test_storage.py`,
+`logging.py`, `backend/README.md`, and **the entire `telemetry/` package** —
+the parser (BUILD-SPEC §3.6–3.12) is not started. `parse_telemetry` is
+registered as a deliberate no-op stub so queued jobs complete instead of
+dead-lettering.
 
-### Deliberately deleted
-`backend/alembic/versions/0001_initial.py` was generated against a schema that
-had two data-corrupting defects (§4). It was removed rather than left in place,
-because a stale migration is worse than no migration — someone runs it.
-**Regenerate it against the current `models.py` once Postgres is reachable.**
+### The Alembic migration — regenerated and applied
+`backend/alembic/versions/0001_initial.py` now exists, generated against the
+corrected `models.py` and applied to a real Postgres 16.
+
+**Autogenerate omitted all 8 partial and functional indexes** — `env.py` puts
+them in `HAND_MANAGED_INDEXES` on purpose, because Alembic does not compare a
+partial index's WHERE predicate. They are hand-written at the bottom of
+`upgrade()`. If you add another partial index, add it there too; autogenerate
+will not.
+
+The most important is `uq_jobs_dedupe_live`, the partial UNIQUE that is the
+queue's whole idempotency story. Without it `ON CONFLICT DO NOTHING` has no
+arbiter to infer and the poller re-enqueues every match on every cycle,
+forever. All 8 were verified present in `pg_indexes` after `upgrade head`, and
+`ck_players_human_only` with them.
 
 ---
 
@@ -179,69 +197,72 @@ ranked stats, map-tile strategy, auth model, double-death rendering.
 
 ---
 
-## 7. Moving to the Ubuntu server
+## 7. The Ubuntu server — as actually set up
 
-`data/` is **gitignored** (134 MB) and will not clone. It contains the archived
-corpus — every test fixture and the entire schema-verification basis.
-
-```bash
-# on the server
-git clone https://github.com/AndAy224/pubg_dashboard.git
-cd pubg_dashboard
-cp .env.example .env      # then paste PUBG_API_KEY + set passwords
-```
-
-Then get the corpus across, either:
+The move happened. The corpus was **re-archived on the server** rather than
+rsynced, which cost nothing because it ran the same day: 65 matches / 111 MB,
+0 failures, ~22 s. That is 4 *more* than the Windows box had, because the
+tracked players kept playing. No rsync is needed unless matches archived
+before 2026-07-08 matter, in which case they are already gone.
 
 ```bash
-# preferred — preserves matches that may since have expired
-rsync -avz --progress /c/Users/avogt.THEANDAY/Github/pubg_dashboard/data/ \
-    user@server:~/pubg_dashboard/data/
-```
-
-or re-archive on the server (`uv run scripts/panic_archive.py`, ~14 s) —
-but that **only recovers matches still inside PUBG's 14-day window**. Anything
-archived on 2026-07-22 that has since aged out is gone. Prefer rsync.
-
-Bring-up:
-
-```bash
-docker compose -f docker/docker-compose.yml up -d
-cd backend && uv sync
-uv run alembic revision --autogenerate -m "initial"   # regenerate; see §3
+cd backend && uv sync --all-groups
 uv run alembic upgrade head
-uv run pubgd import-archive     # load the 61 archived matches, no API calls
-uv run pubgd seed               # track the three players
+uv run pubgd import-archive     # loads the archive, no API calls
+uv run pubgd seed               # tracks the three players (1 token)
 ```
+
+### What is installed, and what is not
+
+`uv` is installed at `~/.local/bin/uv` (not on the default PATH for
+non-login shells — `export PATH="$HOME/.local/bin:$PATH"`).
+
+**Docker is not installed, and neither is node/npm.** Installing them needs
+root, and this account's `sudo` requires a password nobody has typed. So:
+
+* **Postgres 16.2 runs unprivileged** out of `~/pgdata_dev`, via the `pgserver`
+  pip package, over a unix socket. `DATABASE_URL` in `.env` points at it:
+  `postgresql+asyncpg://postgres@/pubg?host=/home/pubg/pgdata_dev`.
+  It is a real Postgres 16 — partial indexes, `SKIP LOCKED`, `ON CONFLICT`
+  inference all verified against it. Start it with:
+  ```bash
+  <scratch>/pg/bin/python -c "import pgserver; \
+      pgserver.get_server('/home/pubg/pgdata_dev', cleanup_mode=None)"
+  ```
+  `cleanup_mode=None` is load-bearing — the default stops the server when the
+  launching process exits.
+* **Storage is the filesystem backend**, not MinIO, for the same reason.
+  `STORAGE_BACKEND=filesystem`, telemetry under `data/telemetry/`.
+
+Neither is the intended production shape. `docker/docker-compose.yml` still
+describes it, and switching over is a `.env` change plus `alembic upgrade
+head` against the new DSN — no code change, which is why the abstraction was
+worth having. **Getting Docker installed is the main open infrastructure
+task.** RAM is also tight for the intended stack: 1.6 GB total, 2 GB swap.
 
 ---
 
 ## 8. What to do next
 
-In order:
+Steps 1–4 of the original list are **done** (see §10). What remains, in order:
 
-1. **Integrate Phase 1.** Nothing has ever been run end to end. Reconcile
-   `ingest/queue.py` vs `queue/jobs.py`, fix cross-module imports and signature
-   mismatches, add the missing `logging.py`. Target: `uv run pytest -q` green
-   and every module importable.
-2. **Regenerate the Alembic migration** against the fixed `models.py`, then
-   `upgrade head` against real Postgres. Verify the partial indexes and the
-   `players` CHECK actually landed — autogenerate handles partial indexes badly,
-   so inspect the generated file before applying.
-3. **`import-archive`** the 61 matches. This is the first real end-to-end
-   exercise of the upsert path, and it runs entirely offline.
-4. **Verify against the corpus**, don't trust green tests: after import, assert
-   61 matches / 5,584 participants / 1,128 bots / 0 rows in `players` with an
-   `ai.` prefix. Those numbers are measured facts, so they're a real oracle.
-5. **Start the poller + worker** as systemd units. This is the point at which
-   the retention race is finally won permanently.
-6. Then Phase 2 (API + frontend shell) per `docs/BUILD-SPEC.md`.
+1. **Run the poller + worker as systemd units.** This is the point at which the
+   retention race is won permanently. Both run correctly by hand today; nothing
+   keeps them alive across a reboot, so the 14-day clock is still unattended.
+2. **Write the `telemetry/` package** — BUILD-SPEC §3.6–3.12. This is the
+   single largest remaining chunk and the whole basis of the replay, the
+   heatmaps and every telemetry-derived column. Bump `PARSER_VERSION` and
+   requeue `parse_telemetry` to replace the current no-op stub. 65 matches /
+   110 MB of real telemetry are on disk to develop against, offline.
+3. **Phase 2: the API**, then the frontend shell, per BUILD-SPEC §5.
 
-### One thing to confirm early
-`X-RateLimit-Reset` units (s / ms / µs) are genuinely ambiguous across sources.
-One authenticated request and a comparison against `time.time()` settles it.
-Get it wrong and the limiter either never sleeps (constant 429s) or sleeps for
-decades.
+### Settled — do not re-research
+`X-RateLimit-Reset` is **UNIX epoch seconds**. Measured live on this key:
+header `1784752312` against a request at `1784752251.9`, i.e. 60.1 s ahead.
+Read as ms or µs it lands ~56 years in the past. Issue #61's "microseconds"
+claim is wrong. Limit is **10/min**, headers lowercase. `ratelimit.py` already
+treats it as seconds and clamps the hold, so it needs no change.
+This closes BUILD-SPEC §7 Q1.
 
 ---
 
@@ -255,6 +276,73 @@ docs/reference/              9 verified API/telemetry references
 scripts/panic_archive.py     archive matches before 14-day expiry (idempotent)
 scripts/extract_schema.py    regenerate the observed schema from the corpus
 backend/                     Python package (see §3 for what's real)
-docker/docker-compose.yml    Postgres + MinIO
+docker/docker-compose.yml    Postgres + MinIO (not running — see §7)
 data/                        GITIGNORED — corpus, fixtures, telemetry
 ```
+
+---
+
+## 10. Verified on the server, 2026-07-22
+
+Numbers below are **measured**, not asserted. Re-derive rather than trust if
+anything looks off.
+
+### The oracle changed: 65 matches, not 61
+Counted straight from `data/matches/*.json` and compared against Postgres
+after `import-archive`. Every figure matched:
+
+| | oracle (files) | Postgres |
+|---|---:|---:|
+| matches | 65 | 65 |
+| rosters | 2 800 | 2 800 |
+| participants | 5 978 | 5 978 |
+| bots | 1 129 (18.9 %) | 1 129 |
+| humans | 4 849 | 4 849 |
+| distinct human players | 4 341 | 4 341 |
+| **`ai.` rows in `players`** | **0** | **0** |
+
+Match types: 53 `official`, 8 `airoyale`, 4 `tutorialatoz`.
+That last row is the §4.1 invariant, and it now has a test behind it.
+
+### Commands that have actually run
+`import-archive` (65/65, 0 failed, 6.3 s) · `seed` (3 tracked) ·
+`poll --once` (3 polled, 1 request, 0 failed) · `worker` (68 jobs drained,
+0 failures) · `jobs` · `stats`.
+
+### The nine defects found by running it
+All at module boundaries; imports and the pre-existing tests saw none of them.
+
+1. `.env` could not be parsed at all — pydantic-settings JSON-decodes
+   `list[str]` before validators run, so the documented `PUBG_SEED_PLAYERS`
+   CSV raised `SettingsError` at import. Fixed with `NoDecode`.
+2. `TELEMETRY_DIR=./data/telemetry` resolved against the **CWD**, so the
+   importer silently reported all telemetry "missing" instead of failing.
+3. `poller.select_due_players` filtered on `Player.is_bot`, a column that no
+   longer exists → `AttributeError` on the poller's first cycle.
+4. `_upsert_players` raised `CompileError: Unconsumed column names: is_bot`
+   on **every** match — ingest failed 100 % of the time.
+5. …and had a second branch inserting **bots into `players`**, the exact
+   defect §4.1 says was removed, justified by an FK that no longer exists.
+6. `import-archive` called `import_archive()` with no session.
+7. `poll` called `run_poller(once=...)`; it takes the context positionally.
+8. `worker` imported `pubg_dashboard.jobs.worker` (it is `queue.worker`) and
+   never built a handler registry — it would have dead-lettered every job.
+9. Nothing ever constructed an `IngestContext`, and neither the client nor the
+   storage class satisfied its port. Fixed by `ingest/wiring.py`.
+
+Plus one test bug: 131 failures the fresh corpus exposed were all
+`roster.stats`, where `Roster` flattens to `.team_id` / `.rank`.
+
+---
+
+## 11. Still missing
+
+* **`telemetry/` — the entire parser.** Not started. See §8.2.
+* **systemd units** for poller and worker. Both work by hand; neither
+  survives a reboot, so retention is still unattended.
+* **Docker + MinIO** (§7), and node/npm for the frontend.
+* `logging.py`, `backend/README.md`, `tests/test_upsert.py`,
+  `test_client.py`, `test_storage.py`.
+* `data/fixtures/telemetry_event_samples.json` — `panic_archive.py` does not
+  generate it, so one test still skips.
+* BUILD-SPEC §7 Q2–Q9 remain open. Q1 (rate limit) is settled in §8.
