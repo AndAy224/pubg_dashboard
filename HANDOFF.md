@@ -6,12 +6,17 @@ up: **read this file, then `docs/BUILD-SPEC.md`, then start at "What to do
 next".**
 
 > **Updated 2026-07-22, later the same day, on the Ubuntu server.**
-> Phase 1 is now integrated and runs end to end. Nine defects were found by
-> executing it — every one at a module boundary, invisible to imports and to
-> the tests. Sections 3, 5 and 8 are rewritten; the rest still stands.
-> The corpus was re-archived here and is now **65 matches**, not 61, so the
-> oracle numbers in §8 changed. See §10 for what is verified and §11 for what
-> is still missing.
+> Phase 1 is integrated and runs end to end, **and the telemetry parser is
+> built and wired**. Nine Phase-1 defects were found by executing it — every
+> one at a module boundary, invisible to imports and to the tests. Sections 3,
+> 5, 7 and 8 are rewritten; the rest still stands. The corpus was re-archived
+> here and is now **65 matches**, not 61, so the oracle numbers changed. See
+> §10 for what is verified and §11 for what is still missing.
+>
+> Two documents were found to be **wrong and have been corrected in place**:
+> BUILD-SPEC gotcha #25 (parachute distance) was never true — it came from a
+> rendering bug in `extract_schema.py` that hid every float value — and rule
+> #10's backpack casing is out of date. Both are detailed in §12.
 
 ---
 
@@ -26,10 +31,10 @@ Tracked players (Steam/PC): **AndAy**, **DaddyGainz**, **SIERIUS_**
 
 | Layer | Choice | Status |
 |---|---|---|
-| Backend | Python 3.12+, FastAPI, asyncio, uv | Phase 1 partially built |
-| DB | Postgres 16 (Docker) | schema written, **never migrated** |
-| Storage | MinIO (Docker) | abstraction written, untested |
-| Frontend | React + Vite + TS + PixiJS | not started |
+| Backend | Python 3.12+, FastAPI, asyncio, uv | ingest + parser done; **API not started** |
+| DB | Postgres 16 (Docker) | migrated (0001, 0002), 65 matches loaded |
+| Storage | MinIO (Docker) | running; 65 telemetry + 65 replay + 65 ledger objects |
+| Frontend | React + Vite + TS + PixiJS | not started (node 24 installed via nvm) |
 
 ---
 
@@ -65,7 +70,7 @@ Keep doing that. When you need a fact about the API, query the corpus first.
   frontend tree, 34 gotchas, 9 open questions
 - `backend/pyproject.toml`, `config.py`, `db/models.py` — the contract
 
-### Phase 1 — now integrated and run  *(was: "written but never run")*
+### Phase 1 and the telemetry parser — built, run, verified
 
 The integration pass has happened. `uv run pytest -q` is **636 passed, 1
 skipped**, every module imports, and the whole pipeline has been exercised
@@ -80,11 +85,14 @@ genuinely better for the poller (one statement for N matches instead of N).
 Consolidating them is tidy-up, **not** a correctness fix — `tests/test_queue.py`
 pins the behaviour of both first.
 
-Still missing: `tests/test_upsert.py`, `test_client.py`, `test_storage.py`,
-`logging.py`, `backend/README.md`, and **the entire `telemetry/` package** —
-the parser (BUILD-SPEC §3.6–3.12) is not started. `parse_telemetry` is
-registered as a deliberate no-op stub so queued jobs complete instead of
-dead-lettering.
+**The `telemetry/` package is complete** (BUILD-SPEC §3.6–3.12): `reader`,
+`events`, `maps`, `frames`, `combat`, `world`, `inventory`, `heatmap`,
+`bundle`, `parse`, plus `ingest/persist.py`. All 65 archived matches parse
+and persist, and reparsing is idempotent. `parse_telemetry` is a real handler,
+no longer a stub.
+
+Still missing: `logging.py`, `backend/README.md`, `tests/test_client.py`,
+`test_storage.py`, and the API + frontend (Phase 2/3).
 
 ### The Alembic migration — regenerated and applied
 `backend/alembic/versions/0001_initial.py` now exists, generated against the
@@ -249,12 +257,11 @@ Steps 1–4 of the original list are **done** (see §10). What remains, in order
 1. **Run the poller + worker as systemd units.** This is the point at which the
    retention race is won permanently. Both run correctly by hand today; nothing
    keeps them alive across a reboot, so the 14-day clock is still unattended.
-2. **Write the `telemetry/` package** — BUILD-SPEC §3.6–3.12. This is the
-   single largest remaining chunk and the whole basis of the replay, the
-   heatmaps and every telemetry-derived column. Bump `PARSER_VERSION` and
-   requeue `parse_telemetry` to replace the current no-op stub. 65 matches /
-   110 MB of real telemetry are on disk to develop against, offline.
-3. **Phase 2: the API**, then the frontend shell, per BUILD-SPEC §5.
+   `systemctl --user` + `loginctl enable-linger pubg` needs no root.
+2. **Phase 2: the API** (BUILD-SPEC §3.13), then the frontend (§5). Every
+   read-side input now exists in Postgres and MinIO: 6,164 kill_events,
+   491,592 heatmap bins, 65 replay bundles.
+3. `logging.py` (structlog config) and `backend/README.md`.
 
 ### Settled — do not re-research
 `X-RateLimit-Reset` is **UNIX epoch seconds**. Measured live on this key:
@@ -337,12 +344,44 @@ Plus one test bug: 131 failures the fresh corpus exposed were all
 
 ## 11. Still missing
 
-* **`telemetry/` — the entire parser.** Not started. See §8.2.
+* **The API** (BUILD-SPEC §3.13) and **the frontend** (§5). Every read-side
+  input they need now exists in Postgres and MinIO.
 * **systemd units** for poller and worker. Both work by hand; neither
-  survives a reboot, so retention is still unattended.
-* **Docker + MinIO** (§7), and node/npm for the frontend.
-* `logging.py`, `backend/README.md`, `tests/test_upsert.py`,
-  `test_client.py`, `test_storage.py`.
+  survives a reboot, so retention is still unattended. `systemctl --user`
+  plus `loginctl enable-linger pubg` needs no root.
+* `logging.py` (structlog config), `backend/README.md`,
+  `tests/test_client.py`, `test_storage.py`.
 * `data/fixtures/telemetry_event_samples.json` — `panic_archive.py` does not
   generate it, so one test still skips.
+* Map tiles (`scripts/fetch_map_assets.py`) — needed before the replay can
+  render anything but dots on a blank background.
 * BUILD-SPEC §7 Q2–Q9 remain open. Q1 (rate limit) is settled in §8.
+
+---
+
+## 12. Documents that turned out to be wrong
+
+Both were *corpus-verified claims* that did not survive re-measurement. Worth
+reading before trusting any other single-sourced number in the spec.
+
+**1. `extract_schema.py` was hiding its own evidence.** `FieldStat.observe`
+collected enum candidates from `str`/`bool`/`int` only. Floats were counted in
+`types` but never in `values`, and nothing recorded that they had been
+dropped — so a field that is 99.7% float and 0.3% integer zero rendered as
+`| distance | 1.00 | float/int | 0 |`, which reads as "the only value ever
+observed is 0".
+
+That manufactured **BUILD-SPEC gotcha #25**, "LogParachuteLanding.distance is
+0 in all 61 archived matches", recorded as fact. It is false: 1,429 of 1,430
+sampled events carry a real float distance (4.7–2,391.7 cm). **219 fields were
+misrepresented this way**, the largest being `common.isGame`, which hid
+213,056 float observations behind an integer-looking enum — those floats being
+exactly the `0.10000000149011612` plane-phase marker that gotcha #21 is about.
+The authoritative document was concealing the evidence for its own subtlest
+trap. Fixed: fields now render "plus N non-enumerated (float) value(s)".
+
+**2. Backpack casing (BUILD-SPEC §3.11 rule 10).** The spec says `"BackPack"`
+(capital P) on the current patch; PUBG's enum file says `"Backpack"`. The
+corpus emits **`"backpack"`, entirely lowercase**, 12,521 times, and no other
+spelling appears. Three spellings from three sources — which is the argument
+for normalising rather than tracking whichever is current.
