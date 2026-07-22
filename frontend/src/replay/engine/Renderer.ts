@@ -1,0 +1,366 @@
+import { Application, Assets, Container, Graphics, Sprite, Texture } from 'pixi.js'
+import type { ReplayBundle } from '../../lib/replayBundle'
+import { FLAG_ALIVE, FLAG_DBNO, FLAG_IN_VEHICLE, NULL_PLAYER } from '../../lib/replayBundle'
+import { BOT_COLOUR, TRACKED_COLOUR, teamColour } from '../../lib/palette'
+import { Viewport } from './Viewport'
+import { publish } from '../store'
+
+/**
+ * The replay renderer.
+ *
+ * **React never renders at 60 Hz.** Everything here is imperative Pixi; the
+ * playhead lives on this object, and DOM panels subscribe to an external store
+ * that ticks at 10 Hz. That boundary is the whole performance design.
+ *
+ * PixiJS v8 API only — `beginFill`/`drawRect`/`lineStyle`/`app.view`/
+ * `cacheAsBitmap` and the ticker's delta argument are all gone.
+ */
+
+const DOT_R = 5
+
+interface Options {
+  bundle: ReplayBundle
+  tileBase: string
+  mapName: string
+  sourcePx: number
+  imageScale: number
+  maxZoom: number
+  tracked: Set<string>
+}
+
+export class Renderer {
+  private readonly world = new Container()
+  private readonly mapLayer = new Container()
+  private readonly gridLayer = new Container()
+  private readonly zoneLayer = new Graphics()
+  private readonly trailLayer = new Graphics()
+  private readonly worldLayer = new Container()
+  private readonly dotLayer = new Container()
+  private readonly fxLayer = new Container()
+
+  private readonly dots: Sprite[] = []
+  /** Monotonic per-player cursor into the CSR arrays — the hot loop's state. */
+  private readonly cursor: Int32Array
+  private readonly worldPx: number
+  private viewport!: Viewport
+  private tileLevel = -1
+  private destroyed = false
+
+  /** Playhead, in milliseconds since t0. A ref, never React state. */
+  nowMs = 0
+  speed = 1
+  playing = true
+
+  private readonly app: Application
+  private readonly opts: Options
+
+  constructor(app: Application, opts: Options) {
+    this.app = app
+    this.opts = opts
+    const b = opts.bundle
+    this.cursor = new Int32Array(b.players.length)
+    // World units are source-image pixels, so the cm->px transform is the same
+    // one the tiles were cut with (including the 8160/8192 correction).
+    this.worldPx = opts.sourcePx
+
+    this.world.addChild(
+      this.mapLayer,
+      this.gridLayer,
+      this.trailLayer,
+      this.zoneLayer,
+      this.worldLayer,
+      this.dotLayer,
+      this.fxLayer,
+    )
+    app.stage.addChild(this.world)
+
+    this.buildGrid()
+    this.buildDots()
+    this.viewport = new Viewport(
+      app.canvas as HTMLCanvasElement,
+      this.world,
+      this.worldPx,
+      (s) => this.onZoom(s),
+    )
+    this.onZoom(this.viewport.scale)
+  }
+
+  // -- geometry ------------------------------------------------------------
+  /** Quantised bundle coordinate -> world pixels. */
+  private toWorld(q: number): number {
+    const cm = (q / 65535) * this.opts.bundle.worldSize
+    return (cm / this.opts.bundle.worldSize) * this.worldPx * this.opts.imageScale
+  }
+
+  // -- layers --------------------------------------------------------------
+  private buildGrid(): void {
+    const g = new Graphics()
+    const step = this.worldPx / 8
+    for (let i = 1; i < 8; i++) {
+      g.moveTo(i * step, 0).lineTo(i * step, this.worldPx)
+      g.moveTo(0, i * step).lineTo(this.worldPx, i * step)
+    }
+    g.stroke({ width: 1, color: 0xffffff, alpha: 0.07 })
+    // Static for the life of the match, so rasterise it once.
+    this.gridLayer.addChild(g)
+    this.gridLayer.cacheAsTexture(true)
+  }
+
+  private buildDots(): void {
+    const b = this.opts.bundle
+    for (const p of b.players) {
+      const s = new Sprite(Texture.WHITE)
+      s.anchor.set(0.5)
+      s.width = DOT_R * 2
+      s.height = DOT_R * 2
+      // Bots render dimmed: they are up to 93% of a TPP squad lobby, and a
+      // hundred equally-bright dots is unreadable.
+      s.tint = p.b
+        ? BOT_COLOUR
+        : this.opts.tracked.has(p.a)
+          ? TRACKED_COLOUR
+          : teamColour(p.t)
+      s.alpha = p.b ? 0.45 : 1
+      s.visible = false
+      this.dots.push(s)
+      this.dotLayer.addChild(s)
+    }
+  }
+
+  /** Swap the tile pyramid level to match the current zoom. */
+  private async onZoom(scale: number): Promise<void> {
+    const wanted = Math.max(
+      0,
+      Math.min(this.opts.maxZoom, Math.ceil(Math.log2(Math.max(scale, 0.001) * 2))),
+    )
+    if (wanted === this.tileLevel) return
+    this.tileLevel = wanted
+
+    const n = 2 ** wanted
+    const size = this.worldPx / n
+    const urls: string[] = []
+    for (let y = 0; y < n; y++)
+      for (let x = 0; x < n; x++)
+        urls.push(`${this.opts.tileBase}/${this.opts.mapName}/${wanted}/${x}_${y}.webp`)
+
+    const textures = await Promise.all(
+      urls.map((u) => Assets.load<Texture>(u).catch(() => Texture.EMPTY)),
+    )
+    if (this.destroyed || this.tileLevel !== wanted) return
+
+    this.mapLayer.removeChildren().forEach((c) => c.destroy())
+    let i = 0
+    for (let y = 0; y < n; y++) {
+      for (let x = 0; x < n; x++) {
+        const s = new Sprite(textures[i++])
+        s.position.set(x * size, y * size)
+        s.width = size
+        s.height = size
+        this.mapLayer.addChild(s)
+      }
+    }
+  }
+
+  // -- clock ---------------------------------------------------------------
+  start(): void {
+    this.app.ticker.add(this.tick)
+  }
+
+  private tick = (): void => {
+    if (this.playing) {
+      this.nowMs += this.app.ticker.deltaMS * this.speed
+      if (this.nowMs > this.opts.bundle.durationMs) {
+        this.nowMs = this.opts.bundle.durationMs
+        this.playing = false
+      }
+    }
+    this.drawFrame()
+  }
+
+  seek(ms: number): void {
+    const clamped = Math.max(0, Math.min(ms, this.opts.bundle.durationMs))
+    // Backwards seek invalidates every monotonic cursor, so they are rebuilt
+    // by binary search — 100 searches, microseconds — and the trail is wiped
+    // because it is append-only.
+    if (clamped < this.nowMs) {
+      this.resetCursors(clamped)
+      this.trailLayer.clear()
+    }
+    this.nowMs = clamped
+    this.drawFrame()
+  }
+
+  private resetCursors(ms: number): void {
+    const b = this.opts.bundle
+    const tick = ms / b.tickMs
+    for (let p = 0; p < b.players.length; p++) {
+      const lo0 = b.pos.off[p]!
+      const hi0 = b.pos.off[p + 1]!
+      let lo = lo0
+      let hi = hi0
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1
+        if (b.pos.t[mid]! <= tick) lo = mid + 1
+        else hi = mid
+      }
+      this.cursor[p] = Math.max(lo0, lo - 1)
+    }
+  }
+
+  // -- frame ---------------------------------------------------------------
+  private drawFrame(): void {
+    const b = this.opts.bundle
+    const tick = this.nowMs / b.tickMs
+
+    let alive = 0
+    let followX = 0
+    let followY = 0
+
+    for (let p = 0; p < b.players.length; p++) {
+      const start = b.pos.off[p]!
+      const end = b.pos.off[p + 1]!
+      const dot = this.dots[p]!
+      if (start === end) {
+        dot.visible = false
+        continue
+      }
+
+      // O(1) amortised: the cursor only ever moves forward during playback.
+      let c = this.cursor[p]!
+      while (c + 1 < end && b.pos.t[c + 1]! <= tick) c++
+      this.cursor[p] = c
+
+      const t0 = b.pos.t[c]!
+      if (t0 > tick) {
+        // Player has not appeared yet.
+        dot.visible = false
+        continue
+      }
+
+      let x = this.toWorld(b.pos.x[c]!)
+      let y = this.toWorld(b.pos.y[c]!)
+      if (c + 1 < end) {
+        // Positions are ~10s apart at worst, so interpolation is mandatory —
+        // without it everyone teleports between samples.
+        const t1 = b.pos.t[c + 1]!
+        const span = t1 - t0
+        if (span > 0) {
+          const f = Math.max(0, Math.min(1, (tick - t0) / span))
+          x += (this.toWorld(b.pos.x[c + 1]!) - x) * f
+          y += (this.toWorld(b.pos.y[c + 1]!) - y) * f
+        }
+      }
+
+      const flags = b.pos.flags[c]!
+      const isAlive = (flags & FLAG_ALIVE) !== 0
+      dot.visible = isAlive
+      if (!isAlive) continue
+      alive++
+
+      dot.position.set(x, y)
+      const dbno = (flags & FLAG_DBNO) !== 0
+      dot.alpha = b.players[p]!.b ? 0.45 : dbno ? 0.5 : 1
+      const scale = (flags & FLAG_IN_VEHICLE) !== 0 ? 1.4 : 1
+      dot.width = DOT_R * 2 * scale
+      dot.height = DOT_R * 2 * scale
+
+      if (this.viewport.isFollowing === p) {
+        followX = x
+        followY = y
+      }
+    }
+
+    if (this.viewport.isFollowing !== null) this.viewport.centreOn(followX, followY)
+
+    this.drawZones(tick)
+    publish({ nowMs: this.nowMs, alive, playing: this.playing, speed: this.speed })
+  }
+
+  private drawZones(tick: number): void {
+    const z = this.opts.bundle.zones
+    if (z.n === 0) return
+    const g = this.zoneLayer
+    g.clear()
+
+    // Find the sample bracketing `tick`.
+    let i = 0
+    while (i + 1 < z.n && z.t[i + 1]! <= tick) i++
+
+    // BLUE = safetyZone* — the current damaging circle. Continuous, so it is
+    // interpolated between samples.
+    let bx = this.toWorld(z.bx[i]!)
+    let by = this.toWorld(z.by[i]!)
+    let br = this.toWorld(z.br[i]!)
+    if (i + 1 < z.n) {
+      const span = z.t[i + 1]! - z.t[i]!
+      if (span > 0) {
+        const f = Math.max(0, Math.min(1, (tick - z.t[i]!) / span))
+        bx += (this.toWorld(z.bx[i + 1]!) - bx) * f
+        by += (this.toWorld(z.by[i + 1]!) - by) * f
+        br += (this.toWorld(z.br[i + 1]!) - br) * f
+      }
+    }
+    if (br > 0) g.circle(bx, by, br).stroke({ width: 2.5, color: 0x3fa7ff, alpha: 0.95 })
+
+    // WHITE = poisonGasWarning* — the next circle. A step function, so it is
+    // SNAPPED. Interpolating makes it slide across the map instead of jumping,
+    // which looks smooth and is wrong.
+    const wr = this.toWorld(z.wr[i]!)
+    if (wr > 0) {
+      g.circle(this.toWorld(z.wx[i]!), this.toWorld(z.wy[i]!), wr).stroke({
+        width: 2,
+        color: 0xffffff,
+        alpha: 0.85,
+      })
+    }
+
+    // Red zone is 0 across every archived match, so it is guarded rather than
+    // assumed — the track exists, the circles do not.
+    const rr = this.toWorld(z.rr[i]!)
+    if (rr > 0) {
+      g.circle(this.toWorld(z.rx[i]!), this.toWorld(z.ry[i]!), rr).fill({
+        color: 0xff4444,
+        alpha: 0.18,
+      })
+    }
+  }
+
+  /** Draw kill markers for everything that has happened up to now. */
+  drawEvents(): void {
+    const b = this.opts.bundle
+    this.worldLayer.removeChildren().forEach((c) => c.destroy())
+    const g = new Graphics()
+    const tick = this.nowMs / b.tickMs
+    for (const e of b.events) {
+      if (e.t > tick) break
+      if (e.k === 'kill') {
+        const vx = this.toWorld(e.vx as number)
+        const vy = this.toWorld(e.vy as number)
+        g.moveTo(vx - 4, vy - 4).lineTo(vx + 4, vy + 4)
+        g.moveTo(vx + 4, vy - 4).lineTo(vx - 4, vy + 4)
+      } else if (e.k === 'cp') {
+        const x = this.toWorld(e.x as number)
+        const y = this.toWorld(e.y as number)
+        g.rect(x - 4, y - 4, 8, 8)
+      }
+    }
+    g.stroke({ width: 1.5, color: 0xff6b6b, alpha: 0.75 })
+    this.worldLayer.addChild(g)
+  }
+
+  followPlayer(index: number | null): void {
+    this.viewport.follow(index)
+  }
+
+  fit(): void {
+    this.viewport.fit()
+  }
+
+  destroy(): void {
+    this.destroyed = true
+    this.app.ticker.remove(this.tick)
+    this.viewport.destroy()
+  }
+}
+
+export { NULL_PLAYER }

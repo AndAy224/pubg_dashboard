@@ -374,13 +374,73 @@ async def test_tiles_are_served_immutable(client: httpx.AsyncClient) -> None:
 
 @pytest.mark.parametrize(
     "path",
+    ["Baltic_Main/0/0_0.png", "Baltic_Main/0/notanint_0.webp", "Baltic_Main/0/1_1_1.webp"],
+)
+async def test_malformed_tile_requests_are_404(client: httpx.AsyncClient, path: str) -> None:
+    """Components are validated rather than joined blindly."""
+    assert (await client.get(f"/api/tiles/{path}")).status_code == 404
+
+
+@pytest.mark.parametrize(
+    "path",
     [
-        "Baltic_Main/0/../../../etc/passwd.webp",
-        "../../../etc/0/0_0.webp",
-        "Baltic_Main/0/0_0.png",
-        "Baltic_Main/0/notanint_0.webp",
+        "/api/tiles/Baltic_Main/0/../../../../../../etc/passwd",
+        "/api/tiles/../../../../../../etc/passwd",
+        "/api/tiles/Baltic_Main/0/..%2f..%2f..%2f..%2f..%2f..%2fetc%2fpasswd",
     ],
 )
-async def test_tile_path_traversal_is_refused(client: httpx.AsyncClient, path: str) -> None:
-    """`Path(root) / ".." / ".."` escapes the tile root perfectly happily."""
-    assert (await client.get(f"/api/tiles/{path}")).status_code == 404
+async def test_tile_traversal_never_leaks_a_file(client: httpx.AsyncClient, path: str) -> None:
+    """The property is "no file escapes", not a particular status code.
+
+    Some of these normalise out of /api entirely before routing and land on
+    the SPA shell, which is a 200 — so asserting 404 would be testing the
+    router's shape rather than the thing that matters.
+    """
+    r = await client.get(path)
+    assert "root:x:0:0" not in r.text
+    assert r.headers.get("content-type") != "image/webp"
+
+
+# ---------------------------------------------------------------------------
+# static SPA
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "../../../../../etc/passwd",
+        "..%2f..%2f..%2f..%2f..%2fetc%2fpasswd",
+        "../../../../../../home/pubg/pubg_dashboard/.env",
+        "assets/../../../../../etc/passwd",
+    ],
+)
+async def test_spa_never_serves_files_outside_the_build(
+    client: httpx.AsyncClient, path: str
+) -> None:
+    """This was a real vulnerability, not a hypothetical.
+
+    Starlette decodes `%2e%2e%2f` before the handler sees it, so `dist / path`
+    resolved outside the build directory. Before the containment check,
+    `GET /..%2f..%2f..%2f..%2f..%2fetc%2fpasswd` returned the real /etc/passwd.
+    An escaping path must fall through to the SPA shell.
+    """
+    r = await client.get(f"/{path}")
+    assert r.status_code == 200
+    assert "root:x:0:0" not in r.text
+    assert "PUBG_API_KEY" not in r.text
+
+
+async def test_spa_serves_client_routes(client: httpx.AsyncClient) -> None:
+    """Only the browser knows /matches/<id>/replay is a route, so it gets the shell."""
+    r = await client.get("/matches/whatever/replay")
+    if r.status_code == 404:
+        pytest.skip("frontend not built")
+    assert r.status_code == 200
+    assert "text/html" in r.headers["content-type"]
+
+
+async def test_api_routes_are_not_shadowed_by_the_spa(client: httpx.AsyncClient) -> None:
+    """The catch-all is mounted after every router; /api must still be JSON."""
+    r = await client.get("/api/health")
+    assert r.headers["content-type"].startswith("application/json")

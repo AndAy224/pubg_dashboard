@@ -1,0 +1,27 @@
+/* Design tokens. Dark-only: this is a game dashboard that sits next to a
+   game, and a light theme would be the odd one out on the second monitor. */
+:root {
+  --bg:        #0e1116;
+  --bg-raised: #151a21;
+  --bg-inset:  #0a0d11;
+  --border:    #232a34;
+  --border-strong: #333d4a;
+
+  --text:      #e6ebf2;
+  --text-dim:  #97a3b4;
+  --text-faint:#5d6875;
+
+  --accent:      #f0b429;   /* PUBG-ish amber */
+  --accent-dim:  #8a6a1a;
+  --good:        #3fb950;
+  --bad:         #f85149;
+  --info:        #58a6ff;
+  --bot:         #6e7681;
+
+  --radius: 6px;
+  --radius-lg: 10px;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+
+  --shell-nav: 216px;
+}
