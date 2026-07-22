@@ -1,0 +1,37 @@
+[Unit]
+Description=PUBG dashboard poller (tracked players -> new match jobs)
+Documentation=file:///home/pubg/pubg_dashboard/HANDOFF.md
+# This unit is what wins the 14-day retention race. PUBG discards match
+# history after ~14 days; anything not enqueued before then is gone for good.
+After=network-online.target
+Wants=network-online.target
+# A [Unit] directive — systemd silently ignores it under [Service].
+# 0 disables the start rate limit, so a dependency that is slow to come
+# up at boot backs off via RestartSec instead of tripping the default
+# 5-starts-in-10s limit and leaving the unit dead until someone notices.
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+WorkingDirectory=/home/pubg/pubg_dashboard/backend
+Environment=PATH=/home/pubg/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/pubg/.local/bin/uv --directory /home/pubg/pubg_dashboard/backend run pubgd poll
+
+Restart=always
+RestartSec=30s
+
+# The poll loop sleeps interruptibly so SIGTERM does not wait out the full
+# POLL_INTERVAL_SECONDS.
+KillSignal=SIGTERM
+TimeoutStopSec=20s
+
+# One batched /players request per cycle for all three tracked players; it
+# holds nothing but the response.
+MemoryHigh=200M
+MemoryMax=300M
+
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

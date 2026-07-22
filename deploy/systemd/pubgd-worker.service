@@ -1,0 +1,49 @@
+[Unit]
+Description=PUBG dashboard job worker (fetch_match, fetch_telemetry, parse_telemetry, backfill)
+Documentation=file:///home/pubg/pubg_dashboard/HANDOFF.md
+# Postgres and MinIO are Docker containers with `restart: unless-stopped`, so
+# they come back on boot on their own. A *user* unit cannot order itself after
+# the system docker.service, so the dependency is handled by restarting until
+# the database answers rather than by ordering. `pubgd` exits non-zero with an
+# actionable message when Postgres is unreachable, which is exactly the signal
+# Restart= needs.
+After=network-online.target
+Wants=network-online.target
+# A [Unit] directive — systemd silently ignores it under [Service].
+# 0 disables the start rate limit, so a dependency that is slow to come
+# up at boot backs off via RestartSec instead of tripping the default
+# 5-starts-in-10s limit and leaving the unit dead until someone notices.
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+WorkingDirectory=/home/pubg/pubg_dashboard/backend
+Environment=PATH=/home/pubg/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/pubg/.local/bin/uv --directory /home/pubg/pubg_dashboard/backend run pubgd worker --concurrency 2
+
+Restart=always
+RestartSec=10s
+
+# The worker installs its own SIGTERM handler and drains in-flight jobs with a
+# 30s grace. Give it more than that before SIGKILL, or a parse is killed
+# mid-write and the job retries for no reason.
+KillSignal=SIGTERM
+TimeoutStopSec=45s
+
+# Measured: a single parse peaks at 269 MB RSS — the 2.4 MB gzipped telemetry
+# expands to ~37 MB of JSON that orjson materialises into Python objects.
+# (BUILD-SPEC 3.7 estimates 40-60 MB; that is off by ~5x.) At concurrency 2
+# that is ~590 MB. This box has 1.6 GB total and Postgres is configured with
+# 512 MB of shared buffers, so the worker is bounded here: MemoryHigh applies
+# reclaim pressure first, and MemoryMax is a backstop that kills only the
+# worker. A job killed this way is simply retried; an unbounded worker would
+# invoke the global OOM killer, and the biggest RSS on the box is Postgres.
+MemoryHigh=700M
+MemoryMax=1G
+
+# The parse path writes only to object storage and Postgres.
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target
