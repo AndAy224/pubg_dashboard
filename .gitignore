@@ -52,9 +52,10 @@ data/
 telemetry/
 *.telemetry.json
 *.telemetry.json.gz
-assets/maps/*.png
-assets/maps/*.jpg
-!assets/maps/.gitkeep
+# Build output of scripts/fetch_map_assets.py — ~21 MB of webp tiles per two
+# maps, plus ~175 MB of cached source PNGs. Regenerate, never commit.
+assets/
+!assets/.gitkeep
 
 # --- Local infra state ---
 docker/volumes/

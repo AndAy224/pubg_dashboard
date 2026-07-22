@@ -344,3 +344,43 @@ async def test_ingest_status(client: httpx.AsyncClient) -> None:
 
 async def test_backfill_unknown_player_is_404(client: httpx.AsyncClient) -> None:
     assert (await client.post("/api/ingest/backfill/account.nope")).status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# tiles
+# ---------------------------------------------------------------------------
+
+
+async def test_tile_manifest_derives_px_per_metre(client: httpx.AsyncClient) -> None:
+    """Same 8192px source, 4x different scale — it has to be derived."""
+    r = await client.get("/api/tiles/manifest.json")
+    if r.status_code == 404:
+        pytest.skip("no tiles built")
+    data = r.json()
+    assert data["Baltic_Main"]["pxPerMetre"] == pytest.approx(1.0)
+    if "Range_Main" in data:
+        assert data["Range_Main"]["pxPerMetre"] == pytest.approx(4.0, rel=0.01)
+    assert "{z}" in data["Baltic_Main"]["tileUrl"]
+
+
+async def test_tiles_are_served_immutable(client: httpx.AsyncClient) -> None:
+    r = await client.get("/api/tiles/Baltic_Main/0/0_0.webp")
+    if r.status_code == 404:
+        pytest.skip("no tiles built")
+    assert r.headers["content-type"] == "image/webp"
+    assert "immutable" in r.headers["cache-control"]
+    assert r.content[:4] == b"RIFF"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "Baltic_Main/0/../../../etc/passwd.webp",
+        "../../../etc/0/0_0.webp",
+        "Baltic_Main/0/0_0.png",
+        "Baltic_Main/0/notanint_0.webp",
+    ],
+)
+async def test_tile_path_traversal_is_refused(client: httpx.AsyncClient, path: str) -> None:
+    """`Path(root) / ".." / ".."` escapes the tile root perfectly happily."""
+    assert (await client.get(f"/api/tiles/{path}")).status_code == 404

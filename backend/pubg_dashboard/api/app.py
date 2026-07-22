@@ -9,7 +9,7 @@ import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from pubg_dashboard.api.routers import health, heatmap, ingest, matches, players
+from pubg_dashboard.api.routers import health, heatmap, ingest, matches, players, tiles
 from pubg_dashboard.config import get_settings
 from pubg_dashboard.db.session import dispose_engine, init_engine
 
@@ -53,7 +53,7 @@ def create_app() -> FastAPI:
             expose_headers=["Content-Encoding", "X-Parser-Version"],
         )
 
-    for module in (health, players, matches, heatmap, ingest):
+    for module in (health, players, matches, heatmap, ingest, tiles):
         app.include_router(module.router, prefix=API_PREFIX)
 
     return app
