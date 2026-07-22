@@ -287,14 +287,23 @@ def _pubg_client(settings: Settings, shard: str, *, needed_for: str) -> Any:
     )
 
 
-def _unpack_player(raw: Mapping[str, Any]) -> tuple[str, str, list[str]]:
+def _unpack_player(raw: Mapping[str, Any] | Any) -> tuple[str, str, list[str]]:
     """`(account_id, name, match_ids)` out of whatever shape the client returns.
 
-    `PubgClient.get_players_by_name()` returns "parsed dicts" whose key style is
-    not pinned yet, so snake_case, camelCase and the raw JSON:API object are all
-    accepted. A key mismatch here would be a silent empty string rather than a
-    crash, which is why it is worth handling explicitly.
+    `PubgClient.get_players()` returns `schemas.Player` models, which expose
+    exactly these three as properties — that is the fast path. Mappings are
+    still accepted (snake_case, camelCase, or the raw JSON:API object) so a
+    caller holding an unparsed payload works too. A key mismatch here would be
+    a silent empty string rather than a crash, which is why it is worth
+    handling explicitly.
     """
+    if not isinstance(raw, Mapping):
+        return (
+            str(raw.account_id),
+            str(raw.name),
+            [str(m) for m in raw.match_ids],
+        )
+
     attributes = raw.get("attributes") or {}
     account_id = str(raw.get("account_id") or raw.get("accountId") or raw.get("id") or "")
     name = str(raw.get("name") or attributes.get("name") or "")
@@ -322,7 +331,7 @@ async def _resolve_chunk(
     spent on the error path.
     """
     try:
-        found.extend(await client.get_players_by_name(list(chunk), shard=shard))
+        found.extend(await client.get_players(list(chunk), shard=shard))
         return
     except not_found as exc:
         blamed = {n for n in chunk if n in set(getattr(exc, "names", None) or ())}
@@ -330,7 +339,7 @@ async def _resolve_chunk(
     if not blamed:
         for name in chunk:
             try:
-                found.extend(await client.get_players_by_name([name], shard=shard))
+                found.extend(await client.get_players([name], shard=shard))
             except not_found:
                 missing.append(name)
         return
@@ -656,15 +665,28 @@ def poll(
         raise typer.Exit(code=1)
 
     module = _import("pubg_dashboard.ingest.poller", needed_for="poll")
-    run_poller = _symbol(module, "run_poller", needed_for="poll")
+    wiring = _import("pubg_dashboard.ingest.wiring", needed_for="poll")
+    build_context = _symbol(wiring, "build_context", needed_for="poll")
+
+    # The poller only reads /players and enqueues; it never touches object
+    # storage. Building a storage handle here would make a MinIO-backed
+    # deployment refuse to poll whenever the bucket was down, for no reason.
+    ctx = build_context(with_storage=False)
+
     if once:
         _dim(f"polling {tracked} tracked player(s), one cycle")
+        poll_once = _symbol(module, "poll_once", needed_for="poll")
+        report = _run(poll_once(ctx))
+        _section("POLL")
+        for name in ("polled", "failed", "new_matches", "requests"):
+            _kv(name.replace("_", " "), str(getattr(report, name)))
     else:
         _dim(
             f"polling {tracked} tracked player(s) every {settings.poll_interval_seconds}s "
             f"(rate limit {settings.pubg_rate_limit_per_min}/min) - ctrl-c to stop"
         )
-    _run(run_poller(once=once))
+        run_poller = _symbol(module, "run_poller", needed_for="poll")
+        _run(run_poller(ctx))
     _ok("poll finished" if once else "poller stopped")
 
 
@@ -696,10 +718,24 @@ def worker(
                 hint=f"valid kinds: {', '.join(JOB_KINDS)}",
             )
 
-    module = _import("pubg_dashboard.jobs.worker", needed_for="worker")
+    # `pubg_dashboard.queue.worker`, not `.jobs.worker` — BUILD-SPEC §1 sketches
+    # the package as `jobs/`, but the tree it describes was never built that way.
+    module = _import("pubg_dashboard.queue.worker", needed_for="worker")
     run_worker = _symbol(module, "run_worker", needed_for="worker")
+    wiring = _import("pubg_dashboard.ingest.wiring", needed_for="worker")
+    build_context = _symbol(wiring, "build_context", needed_for="worker")
+    handlers = _import("pubg_dashboard.ingest.handlers", needed_for="worker")
+    register_handlers = _symbol(handlers, "register_handlers", needed_for="worker")
+
+    # Without this the worker starts, claims jobs, and dead-letters every one of
+    # them as an unknown kind — the registry is what binds `fetch_match` and
+    # friends to the code that runs them.
+    registry: dict[str, Any] = {}
+    register_handlers(registry, build_context())
+
     _dim(f"worker: concurrency={concurrency} kinds={','.join(selected) if selected else 'all'}")
-    _run(run_worker(concurrency=concurrency, kinds=selected))
+    _dim(f"  handlers: {', '.join(sorted(registry))}")
+    _run(run_worker(concurrency=concurrency, kinds=selected, registry=registry))
     _ok("worker stopped")
 
 

@@ -10,6 +10,7 @@ Anything implementing these Protocols can be dropped into `IngestContext`.
 
 from __future__ import annotations
 
+import datetime as dt
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
@@ -69,8 +70,14 @@ class PubgApi(Protocol):
 class TelemetryStore(Protocol):
     """Object storage for raw gzipped telemetry (MinIO/S3 or a local dir)."""
 
-    def key_for(self, match_id: str) -> str:
-        """Deterministic storage key. Must be stable across processes."""
+    def key_for(self, shard: str, match_id: str, played_at: dt.datetime) -> str:
+        """Deterministic storage key. Must be stable across processes.
+
+        `shard` and `played_at` are parameters, not conveniences: the layout is
+        `telemetry/{shard}/{yyyy}/{mm}/{match_id}.json.gz`, and the retention
+        and backfill scans narrow on that prefix. A key derived from `match_id`
+        alone would flatten the hierarchy those scans walk.
+        """
         ...
 
     async def exists(self, key: str) -> bool: ...

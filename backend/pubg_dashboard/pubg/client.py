@@ -52,7 +52,7 @@ import logging
 import pathlib
 from collections.abc import Iterator, Sequence
 from types import TracebackType
-from typing import Any, Final, Protocol, Self
+from typing import Any, Final, Literal, Protocol, Self
 
 import httpx
 import structlog
@@ -400,6 +400,38 @@ class PubgClient:
         ordered = [i for i in identifiers if i in missing_set]
         log.warning("pubg.players.missing", identifiers=ordered)
         return ordered
+
+    # ------------------------------------------------------- raw JSON:API
+    # The ingestion pipeline persists the JSON:API payload *verbatim*: `upsert`
+    # walks `included[]` by `type` and `parse_players_payload` reads
+    # `relationships.matches.data[]`. Both are verified directly against the
+    # archived corpus, so handing them a re-serialised pydantic model would
+    # swap a measured contract for a derived one — and the aliases that carry
+    # the casing landmines (`URL`, `DBNOs`) are exactly what a round-trip is
+    # most likely to lose. These return what PUBG actually sent.
+    async def get_players_payload(
+        self,
+        identifiers: Sequence[str],
+        *,
+        by: Literal["names", "ids"] = "names",
+        shard: str | None = None,
+    ) -> dict[str, Any]:
+        """One `GET /players` page, unparsed. Costs one token.
+
+        At most ``PLAYER_BATCH_SIZE`` identifiers — this does **not** chunk, so
+        the caller controls how much budget it spends. A 404 propagates as a
+        :class:`PubgApiError`; unlike :meth:`get_players` there is no
+        individual re-probe, because the poller does its own binary split.
+        """
+        filter_key = "filter[playerNames]" if by == "names" else "filter[playerIds]"
+        unique = list(dict.fromkeys(i for i in identifiers if i))
+        return await self._get_json(
+            self._path("/players", shard), params={filter_key: ",".join(unique)}
+        )
+
+    async def get_match_payload(self, match_id: str, *, shard: str | None = None) -> dict[str, Any]:
+        """One `GET /matches/{id}`, unparsed. **Costs no rate-limit budget.**"""
+        return await self._get_json(self._path(f"/matches/{match_id}", shard), keyed=False)
 
     # --------------------------------------------------------------- matches
     async def get_match(self, match_id: str, *, shard: str | None = None) -> MatchResponse:

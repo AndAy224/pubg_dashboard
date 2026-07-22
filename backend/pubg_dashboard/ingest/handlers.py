@@ -79,14 +79,22 @@ async def fetch_telemetry(ctx: IngestContext, match_id: str) -> None:
     async with ctx.sessionmaker() as session:
         row = (
             await session.execute(
-                select(Match.telemetry_url, Match.telemetry_key).where(Match.match_id == match_id)
+                # shard and played_at are part of the storage key, not
+                # decoration: the layout is telemetry/{shard}/{yyyy}/{mm}/...
+                # and the retention scan narrows on that prefix.
+                select(
+                    Match.telemetry_url,
+                    Match.telemetry_key,
+                    Match.shard,
+                    Match.played_at,
+                ).where(Match.match_id == match_id)
             )
         ).one_or_none()
 
     if row is None:
         raise MissingMatchError(f"no match row for {match_id}; run fetch_match first")
 
-    telemetry_url, existing_key = row
+    telemetry_url, existing_key, shard, played_at = row
     if existing_key and await store.exists(existing_key):
         # Resumable: a crash between the upload and the DB write, or a plain
         # re-run, must not re-download 20 MB.
@@ -106,7 +114,7 @@ async def fetch_telemetry(ctx: IngestContext, match_id: str) -> None:
         # so what lands in storage is always a real .gz, whichever it did.
         blob = await asyncio.to_thread(gzip.compress, blob, 6)
 
-    key = store.key_for(match_id)
+    key = store.key_for(shard, match_id, played_at)
     size = await store.put(key, blob)
 
     async with ctx.sessionmaker() as session, session.begin():
