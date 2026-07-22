@@ -1,0 +1,11 @@
+# Normalize to LF in the repository. Development started on Windows and moves
+# to an Ubuntu server; without this, CRLF endings ride along into shell scripts
+# and systemd units and break them with an unhelpful "bad interpreter" error.
+* text=auto eol=lf
+
+# Binary — never touch.
+*.png binary
+*.jpg binary
+*.webp binary
+*.gz binary
+*.msgpack binary

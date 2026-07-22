@@ -1,0 +1,89 @@
+# Local development stack: Postgres + MinIO.
+#
+#   docker compose -f docker/docker-compose.yml up -d
+#
+# The backend and frontend run on the host during development (uv run / npm run
+# dev) so reloads are instant. `docker/docker-compose.prod.yml` adds containers
+# for those once we're deploying to the Proxmox box.
+#
+# Env comes from the repo-root .env (see .env.example).
+
+name: pubg-dashboard
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: pubg-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-pubg}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-pubg}
+      # Deterministic collation so ORDER BY on player names is stable across
+      # host platforms (Windows dev vs Linux prod).
+      POSTGRES_INITDB_ARGS: "--locale-provider=icu --icu-locale=en-US"
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pubg} -d ${POSTGRES_DB:-pubg}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    command:
+      # Telemetry ingest writes 100 participant rows per match in bursts, and
+      # heatmap/aggregate queries scan wide. These are modest bumps over the
+      # defaults, sized for a single VM with a few GB to spare.
+      - postgres
+      - -c
+      - shared_buffers=512MB
+      - -c
+      - work_mem=32MB
+      - -c
+      - maintenance_work_mem=256MB
+      - -c
+      - max_connections=100
+      - -c
+      - random_page_cost=1.1
+
+  minio:
+    image: minio/minio:latest
+    container_name: pubg-minio
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-pubgadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set in .env}
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # web console
+    volumes:
+      - miniodata:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # One-shot: creates the telemetry bucket on first boot, then exits.
+  minio-init:
+    image: minio/mc:latest
+    container_name: pubg-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-pubgadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set in .env}
+      MINIO_BUCKET: ${MINIO_BUCKET:-pubg-telemetry}
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD} &&
+      mc mb --ignore-existing local/$${MINIO_BUCKET} &&
+      echo 'bucket ready: '$${MINIO_BUCKET}
+      "
+
+volumes:
+  pgdata:
+  miniodata:
