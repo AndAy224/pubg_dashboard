@@ -23,7 +23,11 @@ services:
       # host platforms (Windows dev vs Linux prod).
       POSTGRES_INITDB_ARGS: "--locale-provider=icu --icu-locale=en-US"
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      # Bound to loopback deliberately. Docker publishes ports by inserting its
+      # own iptables rules *ahead* of ufw, so "0.0.0.0:5432" is genuinely
+      # reachable from the LAN no matter what the firewall says. Nothing needs
+      # it off-box: the API, worker and poller all connect over localhost.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -55,8 +59,10 @@ services:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-pubgadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set in .env}
     ports:
-      - "9000:9000"   # S3 API
-      - "9001:9001"   # web console
+      # Same reasoning as postgres above — and the console at :9001 is an
+      # admin UI with the root credentials from .env.
+      - "127.0.0.1:9000:9000"   # S3 API
+      - "127.0.0.1:9001:9001"   # web console
     volumes:
       - miniodata:/data
     command: server /data --console-address ":9001"

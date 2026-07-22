@@ -10,11 +10,13 @@ StartLimitIntervalSec=0
 Type=exec
 WorkingDirectory=/home/pubg/pubg_dashboard/backend
 Environment=PATH=/home/pubg/.local/bin:/usr/local/bin:/usr/bin:/bin
-# Bound to localhost: the dashboard is LAN-only and the API has no auth. Put a
-# reverse proxy in front before exposing it — /players and /ingest mutate state
-# and spend rate-limit budget.
+# Bound to the LAN by explicit decision — there is no authentication, so
+# anything that can reach this host can read the dashboard and can also POST to
+# /api/players and /api/ingest, which mutate state and spend PUBG rate-limit
+# budget. Postgres and MinIO are deliberately NOT exposed (see
+# docker/docker-compose.yml); only this port is.
 ExecStart=/home/pubg/.local/bin/uv --directory /home/pubg/pubg_dashboard/backend run \
-    uvicorn pubg_dashboard.api.app:app --host 127.0.0.1 --port 8000 --log-level info
+    uvicorn pubg_dashboard.api.app:app --host 0.0.0.0 --port 8000 --log-level info
 
 Restart=always
 RestartSec=10s
