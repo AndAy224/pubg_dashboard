@@ -27,7 +27,7 @@ import re
 import socket
 from collections.abc import AsyncIterator, Coroutine, Mapping, Sequence
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, is_dataclass
 from types import ModuleType
 from typing import Annotated, Any, NoReturn
 
@@ -732,9 +732,25 @@ def import_archive_cmd(
 
     module = _import("pubg_dashboard.ingest.importer", needed_for="import-archive")
     import_archive = _symbol(module, "import_archive", needed_for="import-archive")
-    summary = _run(import_archive(matches_dir=matches, telemetry_dir=telemetry))
 
-    if isinstance(summary, Mapping):
+    # `import_archive` takes the session as its first positional argument and
+    # commits per match, so the caller owns the connection. Every other command
+    # in this file goes through `_session()`; this one used to call straight
+    # into the coroutine and died with "missing 1 required positional
+    # argument: 'session'".
+    async def _do() -> Any:
+        async with _session() as session:
+            return await import_archive(
+                session, matches_dir=matches, telemetry_dir=telemetry
+            )
+
+    summary = _run(_do())
+
+    if is_dataclass(summary) and not isinstance(summary, type):
+        _section("IMPORTED")
+        for field in fields(summary):
+            _kv(field.name.replace("_", " "), str(getattr(summary, field.name)))
+    elif isinstance(summary, Mapping):
         _section("IMPORTED")
         for key, value in summary.items():
             _kv(str(key), str(value))

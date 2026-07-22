@@ -83,7 +83,9 @@ def clock(monkeypatch: pytest.MonkeyPatch) -> Iterator[FakeClock]:
         fake.advance(delay)
         await asyncio.sleep(0)  # still yield, so FIFO lock fairness is preserved
 
-    monkeypatch.setattr(ratelimit, "time", SimpleNamespace(monotonic=fake.monotonic, time=fake.time))
+    monkeypatch.setattr(
+        ratelimit, "time", SimpleNamespace(monotonic=fake.monotonic, time=fake.time)
+    )
     # `Lock` must stay real: the bucket constructs one in __init__.
     monkeypatch.setattr(ratelimit, "asyncio", SimpleNamespace(sleep=fake_sleep, Lock=asyncio.Lock))
     yield fake
@@ -237,7 +239,9 @@ async def test_server_remaining_never_inflates_the_bucket(clock: FakeClock) -> N
     bucket.observe(headers(x_ratelimit_limit=10, x_ratelimit_remaining=9999))
 
     await bucket.acquire()
-    assert clock.total_slept == pytest.approx(6.0, abs=0.01), "the bucket was refilled from a header"
+    assert clock.total_slept == pytest.approx(
+        6.0, abs=0.01
+    ), "the bucket was refilled from a header"
 
 
 async def test_bucket_adopts_a_larger_server_limit(clock: FakeClock) -> None:

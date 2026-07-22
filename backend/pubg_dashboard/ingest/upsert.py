@@ -278,14 +278,31 @@ def _excluded_set(stmt: PgInsert, model: type[Any], columns: Iterable[str]) -> d
     }
 
 
-def _chunked(rows: Sequence[dict[str, Any]], size: int = _CHUNK_ROWS) -> Iterable[list[dict[str, Any]]]:
+def _chunked(
+    rows: Sequence[dict[str, Any]], size: int = _CHUNK_ROWS
+) -> Iterable[list[dict[str, Any]]]:
     for start in range(0, len(rows), size):
         yield list(rows[start : start + size])
 
 
 async def _upsert_players(session: AsyncSession, rows: Sequence[dict[str, Any]]) -> None:
-    humans = [row for row in rows if not row["is_bot"]]
-    bots = [row for row in rows if row["is_bot"]]
+    """Persist the **human** accounts from one match payload.
+
+    Bots are dropped here and live only as `participants` rows flagged
+    `is_bot`. See Player's docstring: `ai.<n>` ids are match-scoped and
+    recycled, so a shared `players` row would merge dozens of unrelated bots
+    into one fictional account and poison every aggregate. `players` also has a
+    `ck_players_human_only` CHECK, so an `ai.` row would be rejected outright.
+
+    `is_bot` is a discriminator carried on the parsed row, not a `players`
+    column — it has to come off before the INSERT or SQLAlchemy raises
+    `CompileError: Unconsumed column names: is_bot`.
+    """
+    humans = [
+        {key: value for key, value in row.items() if key != "is_bot"}
+        for row in rows
+        if not row["is_bot"]
+    ]
 
     for chunk in _chunked(humans):
         stmt = pg_insert(Player).values(chunk)
@@ -299,14 +316,6 @@ async def _upsert_players(session: AsyncSession, rows: Sequence[dict[str, Any]])
             # WAL, and no row lock for the ~99% case.
             where=Player.name.is_distinct_from(stmt.excluded.name),
         )
-        await session.execute(stmt)
-
-    for chunk in _chunked(bots):
-        stmt = pg_insert(Player).values(chunk)
-        # "ai.<n>" is unique only within a match, so the same id names a
-        # different bot in every match. Updating the name would just churn the
-        # row; the row exists solely to satisfy the participant FK.
-        stmt = stmt.on_conflict_do_nothing(index_elements=[Player.account_id])
         await session.execute(stmt)
 
 

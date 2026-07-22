@@ -83,7 +83,8 @@ async def import_archive(
                 queue_parse=queue_parse,
                 report=report,
             )
-        except Exception:  # noqa: BLE001 - one bad file must not abort the corpus
+        # Broad on purpose: one bad file must not abort the corpus.
+        except Exception:
             report.failed += 1
             # The failed match left a dirty transaction behind; drop it so the
             # next file starts clean instead of erroring with "transaction has
@@ -190,5 +191,7 @@ async def unimported_archive_ids(
     ids = archived_match_ids(matches_dir)
     if not ids:
         return []
-    known = set((await session.scalars(select(Match.match_id).where(Match.match_id.in_(ids)))).all())
+    known = set(
+        (await session.scalars(select(Match.match_id).where(Match.match_id.in_(ids)))).all()
+    )
     return [match_id for match_id in ids if match_id not in known]

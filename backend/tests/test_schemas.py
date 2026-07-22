@@ -239,7 +239,7 @@ def test_won_true_roster_is_rank_one(all_match_payloads: list[dict[str, Any]]) -
     for payload in all_match_payloads:
         for roster in MatchResponse.model_validate(payload).rosters:
             if roster.won:
-                assert roster.stats.rank == 1
+                assert roster.rank == 1
 
 
 # ===========================================================================
@@ -353,7 +353,7 @@ def test_team_id_is_unique_within_a_match(match_payload: dict[str, Any]) -> None
     Verified unique across all 61 matches; if PUBG ever repeats a teamId the
     insert fails on a constraint at 3am instead of here.
     """
-    team_ids = [r.stats.team_id for r in MatchResponse.model_validate(match_payload).rosters]
+    team_ids = [r.team_id for r in MatchResponse.model_validate(match_payload).rosters]
     assert len(team_ids) == len(set(team_ids))
 
 
@@ -370,7 +370,7 @@ def test_every_participant_belongs_to_exactly_one_roster(match_payload: dict[str
     for roster in match.rosters:
         for pid in roster.participant_ids:
             assert pid not in owners, f"participant {pid} listed by two rosters"
-            owners[pid] = roster.stats.team_id
+            owners[pid] = roster.team_id
 
     assert set(owners) == {p.id for p in match.participants}
 
@@ -390,8 +390,12 @@ def test_enum_like_values_stay_within_the_observed_sets(
         match_types.add(match.attributes.match_type)
         death_types.update(p.stats.death_type for p in match.participants)
 
-    assert match_types <= OBSERVED_MATCH_TYPES, f"new matchType: {match_types - OBSERVED_MATCH_TYPES}"
-    assert death_types <= OBSERVED_DEATH_TYPES, f"new deathType: {death_types - OBSERVED_DEATH_TYPES}"
+    assert match_types <= OBSERVED_MATCH_TYPES, (
+        f"new matchType: {match_types - OBSERVED_MATCH_TYPES}"
+    )
+    assert death_types <= OBSERVED_DEATH_TYPES, (
+        f"new deathType: {death_types - OBSERVED_DEATH_TYPES}"
+    )
     # Only `official` counts toward career stats, so the split has to be real.
     assert "official" in match_types
 

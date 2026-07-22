@@ -104,7 +104,10 @@ async def select_due_players(
     # least(base * 2^failures, cap) seconds, computed in SQL so the whole
     # backoff decision is one indexable predicate.
     backoff = func.least(
-        cast(base, Float) * func.power(2.0, func.least(Player.consecutive_poll_failures, _MAX_BACKOFF_DOUBLINGS)),
+        cast(base, Float)
+        * func.power(
+            2.0, func.least(Player.consecutive_poll_failures, _MAX_BACKOFF_DOUBLINGS)
+        ),
         cast(float(MAX_BACKOFF_SECONDS), Float),
     ) * literal_column("interval '1 second'")
 
@@ -112,7 +115,11 @@ async def select_due_players(
         select(Player.account_id, Player.name)
         .where(
             Player.tracked.is_(True),
-            Player.is_bot.is_(False),
+            # No `is_bot` filter: `players` is human-only by construction, and
+            # the ck_players_human_only CHECK enforces it. This used to read
+            # `Player.is_bot.is_(False)`, a leftover from the schema where bots
+            # got player rows — it raised AttributeError on the poller's very
+            # first cycle, because the column no longer exists.
             or_(
                 Player.last_polled_at.is_(None),
                 Player.last_polled_at <= func.now() - backoff,
@@ -130,7 +137,9 @@ async def select_due_players(
     return [DuePlayer(account_id=row.account_id, name=row.name) for row in rows]
 
 
-async def _mark_polled(session: AsyncSession, matched: Sequence[tuple[DuePlayer, PlayerRef]]) -> None:
+async def _mark_polled(
+    session: AsyncSession, matched: Sequence[tuple[DuePlayer, PlayerRef]]
+) -> None:
     if not matched:
         return
     await session.execute(
@@ -169,7 +178,8 @@ async def _poll_batch(ctx: IngestContext, batch: Sequence[DuePlayer], report: Po
     try:
         report.requests += 1
         payload = await ctx.api.get_players_by_names(names)
-    except Exception as exc:  # noqa: BLE001 - one bad batch must not stop the cycle
+    # Broad on purpose: one bad batch must not stop the cycle.
+    except Exception as exc:
         if _status_code(exc) == 404 and len(batch) > 1:
             # An unknown name 404s the ENTIRE batch, so one renamed account
             # would otherwise blind us to its nine batch-mates forever. Binary
@@ -256,7 +266,8 @@ async def run_poller(ctx: IngestContext, *, stop: asyncio.Event | None = None) -
             await poll_once(ctx)
         except asyncio.CancelledError:
             raise
-        except Exception:  # noqa: BLE001 - the poller must outlive any single cycle
+        # Broad on purpose: the poller must outlive any single cycle.
+        except Exception:
             log.exception("poll.cycle_failed")
 
         # Interruptible sleep: SIGTERM should not wait out a 5 minute interval.
