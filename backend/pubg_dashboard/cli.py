@@ -769,6 +769,20 @@ def import_archive_cmd(
     module = _import("pubg_dashboard.ingest.importer", needed_for="import-archive")
     import_archive = _symbol(module, "import_archive", needed_for="import-archive")
 
+    # With the filesystem backend the archive already sits where the store
+    # would have put it, so `storage=None` registers it in place for free.
+    # With MinIO/S3 that would record keys pointing at objects the bucket does
+    # not contain — the importer only warns about it, so the choice is made
+    # here instead.
+    storage = None
+    if settings.storage_backend != "filesystem":
+        wiring = _import("pubg_dashboard.ingest.wiring", needed_for="import-archive")
+        adapter = _symbol(wiring, "TelemetryStoreAdapter", needed_for="import-archive")
+        factory = _import("pubg_dashboard.storage.factory", needed_for="import-archive")
+        get_storage = _symbol(factory, "get_storage", needed_for="import-archive")
+        storage = adapter(get_storage())
+        _dim(f"          uploading to {settings.storage_backend} ({settings.minio_bucket})")
+
     # `import_archive` takes the session as its first positional argument and
     # commits per match, so the caller owns the connection. Every other command
     # in this file goes through `_session()`; this one used to call straight
@@ -777,7 +791,7 @@ def import_archive_cmd(
     async def _do() -> Any:
         async with _session() as session:
             return await import_archive(
-                session, matches_dir=matches, telemetry_dir=telemetry
+                session, storage=storage, matches_dir=matches, telemetry_dir=telemetry
             )
 
     summary = _run(_do())

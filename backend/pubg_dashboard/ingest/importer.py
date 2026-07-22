@@ -12,6 +12,7 @@ is already registered, and can be re-run after a crash or a partial run.
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import pathlib
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -132,7 +133,13 @@ async def _import_one(
     if existing_key and (storage is None or await storage.exists(existing_key)):
         report.telemetry_skipped += 1
     else:
-        key, size = await _register_telemetry(match_id, telemetry_path, storage)
+        key, size = await _register_telemetry(
+            match_id,
+            telemetry_path,
+            storage,
+            shard=match.shard,
+            played_at=match.played_at,
+        )
         await session.execute(
             update(Match)
             .where(Match.match_id == match_id)
@@ -163,8 +170,16 @@ async def _register_telemetry(
     match_id: str,
     telemetry_path: pathlib.Path,
     storage: TelemetryStore | None,
+    *,
+    shard: str,
+    played_at: dt.datetime,
 ) -> tuple[str, int]:
-    """Put the archived `.json.gz` into storage, or register it where it lies."""
+    """Put the archived `.json.gz` into storage, or register it where it lies.
+
+    `shard` and `played_at` are required because the storage key is date
+    partitioned — `telemetry/{shard}/{yyyy}/{mm}/{match_id}.json.gz` — and the
+    retention and backfill scans narrow on that prefix.
+    """
     if storage is None:
         # Filesystem backend: the file already sits under settings.telemetry_dir
         # under exactly the name the store would have chosen. Nothing to copy.
@@ -173,7 +188,7 @@ async def _register_telemetry(
     # panic_archive.py wrote gzip.compress(response.content), so these are
     # genuine .gz bytes and go to the store untouched.
     blob = await asyncio.to_thread(telemetry_path.read_bytes)
-    key = storage.key_for(match_id)
+    key = storage.key_for(shard, match_id, played_at)
     size = await storage.put(key, blob)
     return key, size
 
