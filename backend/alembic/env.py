@@ -50,6 +50,8 @@ HAND_MANAGED_INDEXES: frozenset[str] = frozenset(
         "ix_participants_human",  # partial: WHERE NOT is_bot
         "uq_jobs_dedupe_live",  # partial UNIQUE: WHERE state IN (pending, running)
         "ix_jobs_claim",  # partial: WHERE state = 'pending'
+        "ix_kill_killer",  # partial: WHERE killer_account_id IS NOT NULL
+        "ix_kill_weapon",  # partial: WHERE killer_account_id IS NOT NULL
     }
 )
 

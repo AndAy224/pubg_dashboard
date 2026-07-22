@@ -13,6 +13,7 @@ Two rules every handler obeys:
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import gzip
 from collections.abc import MutableMapping
 from typing import Any, Final
@@ -144,17 +145,91 @@ async def _queue_parse(ctx: IngestContext, match_id: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# parse_telemetry (Phase 3)
+# parse_telemetry
 # ---------------------------------------------------------------------------
 async def parse_telemetry(ctx: IngestContext, match_id: str) -> None:
-    """Stub. The parser lands in Phase 3.
+    """Parse stored raw telemetry into the replay bundle, kills and heatmap.
 
-    Registered as a no-op rather than left unregistered so the jobs the fetcher
-    already queues complete instead of dead-lettering with "no handler". They
-    are re-queued for real work by the reprocess path once the parser exists,
-    which is what `matches.parser_version` is for.
+    Reads from object storage rather than the network: bumping
+    `PARSER_VERSION` requeues every match and re-derives everything with no
+    re-download, which is the entire reason raw telemetry is archived.
     """
-    log.debug("telemetry.parse_stub", match_id=match_id)
+    from pubg_dashboard.ingest.persist import persist_parse_result
+    from pubg_dashboard.storage.base import replay_key as replay_key_for
+    from pubg_dashboard.storage.factory import get_storage
+    from pubg_dashboard.telemetry.bundle import read_heat_ledger
+    from pubg_dashboard.telemetry.parse import parse_telemetry as run_parser
+
+    storage = get_storage()
+
+    async with ctx.sessionmaker() as session:
+        row = (
+            await session.execute(
+                select(
+                    Match.telemetry_key,
+                    Match.shard,
+                    Match.game_mode,
+                    Match.map_name,
+                    Match.played_at,
+                    Match.telemetry_parsed_at,
+                    Match.heat_ledger_key,
+                ).where(Match.match_id == match_id)
+            )
+        ).one_or_none()
+
+    if row is None:
+        raise MissingMatchError(f"no match row for {match_id}")
+    key, shard, game_mode, map_name, played_at, parsed_at, ledger_key = row
+    if not key:
+        raise MissingMatchError(
+            f"{match_id} has no stored telemetry; run fetch_telemetry first"
+        )
+
+    raw = await storage.get(key)
+    result = await asyncio.to_thread(
+        run_parser,
+        raw,
+        match_id=match_id,
+        shard=shard,
+        game_mode=game_mode,
+        played_at=played_at,
+    )
+
+    if result.unknown_events:
+        # Never fatal — LogSpecialZoneInCharacters is in no documentation at
+        # all — but a new event type should surface rather than vanish.
+        log.info("telemetry.unknown_events", match_id=match_id, **result.unknown_events)
+
+    # Subtract this match's previous heatmap contribution before adding the
+    # new one, or a reparse double-counts every bin it touches.
+    previous = None
+    if ledger_key and await storage.exists(ledger_key):
+        previous = read_heat_ledger(await storage.get(ledger_key))
+
+    bundle_key = replay_key_for(result.parser_version, match_id)
+    ledger_out = f"heat/v{result.parser_version}/{match_id}.msgpack.gz"
+    await storage.put(bundle_key, result.bundle)
+    await storage.put(ledger_out, result.heat_ledger)
+
+    async with ctx.sessionmaker() as session, session.begin():
+        await persist_parse_result(
+            session,
+            result,
+            replay_key=bundle_key,
+            heat_ledger_key=ledger_out,
+            previous_ledger=previous,
+            was_parsed=parsed_at is not None,
+            map_name=map_name,
+            day=played_at.astimezone(dt.UTC).date(),
+        )
+
+    log.info(
+        "telemetry.parsed",
+        match_id=match_id,
+        kills=len(result.kill_rows),
+        bins=len(result.heatmap_rows),
+        replay_bytes=len(result.bundle),
+    )
 
 
 # ---------------------------------------------------------------------------

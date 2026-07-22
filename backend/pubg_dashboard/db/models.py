@@ -30,7 +30,7 @@ from sqlalchemy import (
     Text,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 if TYPE_CHECKING:
@@ -140,7 +140,25 @@ class Match(Base):
     # without re-downloading 100 MB of telemetry.
     telemetry_parsed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
     parser_version: Mapped[int | None] = mapped_column(Integer)
+    parse_error: Mapped[str | None] = mapped_column(Text)
     replay_key: Mapped[str | None] = mapped_column(Text)
+    replay_bytes: Mapped[int | None] = mapped_column(Integer)
+    # Object-storage key of the per-match heatmap ledger. A reparse subtracts
+    # this match's previous contribution before adding the new one; without the
+    # ledger every reparse double-counts every bin, so a missing key means
+    # "refuse to reparse", not "reparse anyway".
+    heat_ledger_key: Mapped[str | None] = mapped_column(Text)
+
+    # --- denormalised from telemetry, cheap and constantly queried ----------
+    # LogMatchStart._D — the replay epoch. `played_at` is the API's ingest
+    # time, not the match start, so this is the one to use for real timing.
+    telemetry_t0: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    team_size: Mapped[int | None] = mapped_column(Integer)
+    weather_id: Mapped[str | None] = mapped_column(String(32))
+    camera_view: Mapped[str | None] = mapped_column(String(16))
+    num_start_players: Mapped[int | None] = mapped_column(Integer)
+    num_start_teams: Mapped[int | None] = mapped_column(Integer)
+    bot_count: Mapped[int | None] = mapped_column(Integer)
 
     ingested_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -245,6 +263,12 @@ class Participant(Base):
     # --- telemetry-derived, filled by the parser ----------------------------
     # Human-only kill count, which is what the default stat views show.
     kills_human: Mapped[int | None] = mapped_column(Integer)
+    knocks_human: Mapped[int | None] = mapped_column(Integer)
+    # From LogMatchEnd.allWeaponStats, never re-derived: every throwable emits
+    # both LogPlayerAttack and LogPlayerUseThrowable under one attackId, so
+    # counting attack events double-counts them.
+    shots_fired: Mapped[int | None] = mapped_column(Integer)
+    shots_hit: Mapped[int | None] = mapped_column(Integer)
     landing_x: Mapped[float | None] = mapped_column(Float)
     landing_y: Mapped[float | None] = mapped_column(Float)
     landed_at_s: Mapped[float | None] = mapped_column(Float)
@@ -324,6 +348,76 @@ class Job(Base):
             "ix_jobs_claim",
             "run_after",
             postgresql_where=text("state = 'pending'"),
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Kill events
+# ---------------------------------------------------------------------------
+class KillEvent(Base):
+    """The one telemetry-derived table that lives in SQL.
+
+    Everything else the parser produces goes into the replay bundle or
+    `heatmap_bins`. Kills are the exception because the UI filters and
+    aggregates them by weapon, distance and time ("longest kills", "kills with
+    the Beryl", weapon-filtered heatmaps) and a per-match bundle cannot answer
+    a cross-match question.
+    """
+
+    __tablename__ = "kill_events"
+
+    match_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("matches.match_id", ondelete="CASCADE"), primary_key=True
+    )
+    # Index within this match's parsed kill list, stable for a parser version.
+    seq: Mapped[int] = mapped_column(Integer, primary_key=True)
+    t_s: Mapped[float] = mapped_column(Float)  # seconds since telemetry_t0
+
+    # No `index=True` — ix_kill_victim below already leads with this column.
+    victim_account_id: Mapped[str] = mapped_column(String(64))
+    victim_team_id: Mapped[int] = mapped_column(Integer)
+    victim_is_bot: Mapped[bool] = mapped_column(Boolean, default=False)
+    victim_x: Mapped[float] = mapped_column(Float)  # CENTIMETRES
+    victim_y: Mapped[float] = mapped_column(Float)
+
+    # NULL for zone / fall / drown deaths — 2.9% of kills in the corpus.
+    # `killer`, `finisher` and `dBNOMaker` are all genuinely nullable, at
+    # measured presence 0.96 / 0.97 / 0.52.
+    killer_account_id: Mapped[str | None] = mapped_column(String(64))
+    killer_team_id: Mapped[int | None] = mapped_column(Integer)
+    killer_is_bot: Mapped[bool | None] = mapped_column(Boolean)
+    killer_x: Mapped[float | None] = mapped_column(Float)
+    killer_y: Mapped[float | None] = mapped_column(Float)
+    dbno_maker_account_id: Mapped[str | None] = mapped_column(String(64))
+    finisher_account_id: Mapped[str | None] = mapped_column(String(64))
+
+    weapon: Mapped[str | None] = mapped_column(String(64))
+    damage_type: Mapped[str | None] = mapped_column(String(48))
+    damage_reason: Mapped[str | None] = mapped_column(String(24))
+    # CENTIMETRES. **-1 is a sentinel meaning "not applicable"**, not a
+    # distance — 8.6% of kills carry it, so every "longest kill" query must
+    # filter `> 0` or a melee kill wins.
+    distance_cm: Mapped[float | None] = mapped_column(Float)
+    is_suicide: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_team_kill: Mapped[bool] = mapped_column(Boolean, default=False)
+    through_wall: Mapped[bool | None] = mapped_column(Boolean)
+    assists: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), default=list, server_default=text("'{}'")
+    )
+
+    __table_args__ = (
+        Index(
+            "ix_kill_killer",
+            "killer_account_id",
+            "match_id",
+            postgresql_where=text("killer_account_id IS NOT NULL"),
+        ),
+        Index("ix_kill_victim", "victim_account_id", "match_id"),
+        Index(
+            "ix_kill_weapon",
+            "weapon",
+            postgresql_where=text("killer_account_id IS NOT NULL"),
         ),
     )
 
