@@ -31,7 +31,7 @@ Tracked players (Steam/PC): **AndAy**, **DaddyGainz**, **SIERIUS_**
 
 | Layer | Choice | Status |
 |---|---|---|
-| Backend | Python 3.12+, FastAPI, asyncio, uv | ingest + parser done; **API not started** |
+| Backend | Python 3.12+, FastAPI, asyncio, uv | ingest + parser + API done |
 | DB | Postgres 16 (Docker) | migrated (0001, 0002), 65 matches loaded |
 | Storage | MinIO (Docker) | running; 65 telemetry + 65 replay + 65 ledger objects |
 | Frontend | React + Vite + TS + PixiJS | not started (node 24 installed via nvm) |
@@ -254,14 +254,18 @@ task.** RAM is also tight for the intended stack: 1.6 GB total, 2 GB swap.
 
 Steps 1–4 of the original list are **done** (see §10). What remains, in order:
 
-1. **Run the poller + worker as systemd units.** This is the point at which the
-   retention race is won permanently. Both run correctly by hand today; nothing
-   keeps them alive across a reboot, so the 14-day clock is still unattended.
-   `systemctl --user` + `loginctl enable-linger pubg` needs no root.
-2. **Phase 2: the API** (BUILD-SPEC §3.13), then the frontend (§5). Every
-   read-side input now exists in Postgres and MinIO: 6,164 kill_events,
-   491,592 heatmap bins, 65 replay bundles.
-3. `logging.py` (structlog config) and `backend/README.md`.
+1. **The frontend** (BUILD-SPEC §5). This is the only large piece left.
+   Node 24 is installed via nvm; the API it consumes is running and every
+   endpoint it needs is verified against real data.
+2. **Map tiles** (`scripts/fetch_map_assets.py`). The replay renders dots on a
+   blank background until these exist. Watch the gotchas in §6 #31: the
+   High_Res PNGs are Git-LFS pointers on `raw.githubusercontent.com` and must
+   come from `media.githubusercontent.com`.
+3. Give `heatmap_bins` a `match_type` dimension. Heatmaps currently include
+   `airoyale`/`tutorialatoz` while career stats count `official` only — one
+   tracked player shows 28 career kills against 48 binned. It is a schema
+   change plus a reparse; the reparse is free and idempotent.
+4. `logging.py` (structlog config) and `backend/README.md`.
 
 ### Settled — do not re-research
 `X-RateLimit-Reset` is **UNIX epoch seconds**. Measured live on this key:
@@ -344,11 +348,15 @@ Plus one test bug: 131 failures the fresh corpus exposed were all
 
 ## 11. Still missing
 
-* **The API** (BUILD-SPEC §3.13) and **the frontend** (§5). Every read-side
-  input they need now exists in Postgres and MinIO.
-* **systemd units** for poller and worker. Both work by hand; neither
-  survives a reboot, so retention is still unattended. `systemctl --user`
-  plus `loginctl enable-linger pubg` needs no root.
+* **The frontend** (BUILD-SPEC §5) and **map tiles**. Everything the frontend
+  reads is live and verified.
+* **No authentication anywhere.** The API binds to 127.0.0.1 for that reason.
+  `/players` and `/ingest` mutate state and spend rate-limit budget, so put
+  something in front of them before exposing the box (BUILD-SPEC §7 Q7).
+* **No safe way to delete a match.** Deleting the row orphans its heatmap
+  contribution, and a later re-ingest then double-counts those bins. The
+  ledger in object storage makes a correct `pubgd match rm` straightforward;
+  it just does not exist yet.
 * `logging.py` (structlog config), `backend/README.md`,
   `tests/test_client.py`, `test_storage.py`.
 * `data/fixtures/telemetry_event_samples.json` — `panic_archive.py` does not

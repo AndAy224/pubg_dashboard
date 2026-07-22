@@ -1,0 +1,33 @@
+[Unit]
+Description=PUBG dashboard API (FastAPI/uvicorn)
+Documentation=file:///home/pubg/pubg_dashboard/HANDOFF.md
+After=network-online.target
+Wants=network-online.target
+# See pubgd-worker.service: a [Unit] directive, silently ignored under [Service].
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+WorkingDirectory=/home/pubg/pubg_dashboard/backend
+Environment=PATH=/home/pubg/.local/bin:/usr/local/bin:/usr/bin:/bin
+# Bound to localhost: the dashboard is LAN-only and the API has no auth. Put a
+# reverse proxy in front before exposing it — /players and /ingest mutate state
+# and spend rate-limit budget.
+ExecStart=/home/pubg/.local/bin/uv --directory /home/pubg/pubg_dashboard/backend run \
+    uvicorn pubg_dashboard.api.app:app --host 127.0.0.1 --port 8000 --log-level info
+
+Restart=always
+RestartSec=10s
+KillSignal=SIGTERM
+TimeoutStopSec=20s
+
+# Read-only endpoints, but /replay reads whole bundles into memory to serve
+# them; a few concurrent requests for the largest match is the worst case.
+MemoryHigh=400M
+MemoryMax=600M
+
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target
