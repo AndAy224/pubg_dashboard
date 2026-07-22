@@ -34,7 +34,7 @@ Tracked players (Steam/PC): **AndAy**, **DaddyGainz**, **SIERIUS_**
 | Backend | Python 3.12+, FastAPI, asyncio, uv | ingest + parser + API done |
 | DB | Postgres 16 (Docker) | migrated (0001, 0002), 65 matches loaded |
 | Storage | MinIO (Docker) | running; 65 telemetry + 65 replay + 65 ledger objects |
-| Frontend | React + Vite + TS + PixiJS | not started (node 24 installed via nvm) |
+| Frontend | React + Vite + TS + PixiJS | built; served from the API at `/` |
 
 ---
 
@@ -254,17 +254,18 @@ task.** RAM is also tight for the intended stack: 1.6 GB total, 2 GB swap.
 
 Steps 1–4 of the original list are **done** (see §10). What remains, in order:
 
-1. **The frontend** (BUILD-SPEC §5). This is the only large piece left.
-   Node 24 is installed via nvm; the API it consumes is running and every
-   endpoint it needs is verified against real data.
-2. **Map tiles** (`scripts/fetch_map_assets.py`). The replay renders dots on a
-   blank background until these exist. Watch the gotchas in §6 #31: the
-   High_Res PNGs are Git-LFS pointers on `raw.githubusercontent.com` and must
-   come from `media.githubusercontent.com`.
-3. Give `heatmap_bins` a `match_type` dimension. Heatmaps currently include
+1. **Decide how the dashboard is reached.** The API binds to 127.0.0.1
+   because **there is no authentication anywhere** and `/players` and
+   `/ingest` mutate state and spend rate-limit budget. An SSH tunnel
+   (`ssh -L 8000:localhost:8000 pubg@<host>`) works today with no change.
+   Binding to the LAN means accepting unauthenticated access from it.
+2. Give `heatmap_bins` a `match_type` dimension. Heatmaps currently include
    `airoyale`/`tutorialatoz` while career stats count `official` only — one
    tracked player shows 28 career kills against 48 binned. It is a schema
    change plus a reparse; the reparse is free and idempotent.
+3. Frontend polish: the replay has no inventory panel or match strip yet
+   (BUILD-SPEC §4.5 / §5.2), and there are no trend charts on the player page
+   — `recharts` is installed but unused, so it tree-shakes out of the bundle.
 4. `logging.py` (structlog config) and `backend/README.md`.
 
 ### Settled — do not re-research
@@ -348,11 +349,15 @@ Plus one test bug: 131 failures the fresh corpus exposed were all
 
 ## 11. Still missing
 
-* **The frontend** (BUILD-SPEC §5) and **map tiles**. Everything the frontend
-  reads is live and verified.
 * **No authentication anywhere.** The API binds to 127.0.0.1 for that reason.
   `/players` and `/ingest` mutate state and spend rate-limit budget, so put
   something in front of them before exposing the box (BUILD-SPEC §7 Q7).
+* **Replay panels**: inventory (§4.5) and the match strip (§5.2) are not
+  built. The bundle already carries the inventory delta track and keyframes,
+  so it is frontend work only — no reparse needed.
+* **Only Erangel and Camp Jackal are tiled**, because they are the only maps
+  in the archive. `uv run scripts/fetch_map_assets.py` picks up any new map
+  automatically; `--all` tiles everything (~600 MB of source).
 * **No safe way to delete a match.** Deleting the row orphans its heatmap
   contribution, and a later re-ingest then double-counts those bins. The
   ledger in object storage makes a correct `pubgd match rm` straightforward;
