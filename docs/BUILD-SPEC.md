@@ -726,9 +726,14 @@ Rules, all measured against real data — each one is a class of silent corrupti
    `(itemId, sorted(attachedItems))`, never a dict keyed on `itemId` — two identical AKs are
    indistinguishable except by their attachments.
 9. `stackCount: 0` is real on genuine items. Do not assert `> 0`, and do not let 0 delete a stack.
-10. `subCategory` for backpacks is **`"BackPack"`** (capital P) on the current patch and `"Backpack"`
-    on 2018 data — and the official enum file still says `"Backpack"`. Normalise casing before
-    comparing. Same for the whole enum: `Bluechip`, `CamoNetting` already exist outside it.
+10. `subCategory` for backpacks is **`"backpack"` — entirely lowercase** on the current patch
+    (measured 2026-07-22: 12,521 occurrences, and no other spelling appears anywhere in the
+    65-match corpus). This entry previously claimed `"BackPack"` with a capital P; that was true
+    of an earlier patch, `"Backpack"` is what 2018 data and PUBG's own enum file say, and
+    `"backpack"` is what the wire says today. **Three spellings from three sources**, which is the
+    whole argument for normalising rather than memorising the current one. Same for the rest of
+    the enum — the corpus also carries `BlueChip` (capital C, not `Bluechip`), `CamoNetting`,
+    `Ascender` and `Gadget`, none of them in the official list.
 
 Output: a delta track + periodic keyframes (§4.5).
 
