@@ -12,7 +12,14 @@ import { ReplayCanvas } from '../replay/ReplayCanvas'
 import { Timeline } from '../replay/Timeline'
 import { InventoryPanel } from '../replay/Inventory'
 import type { Renderer } from '../replay/engine/Renderer'
-import { getSnapshot, subscribe } from '../replay/store'
+import {
+  ALIVE,
+  KNOCKED,
+  getHealthSnapshot,
+  getSnapshot,
+  subscribe,
+  subscribeHealth,
+} from '../replay/store'
 import './Replay.css'
 
 const SPEEDS = [1, 2, 4, 8, 20]
@@ -185,6 +192,31 @@ function useReplayState() {
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
 }
 
+/** Notified only when a health value actually changed, not on every tick. */
+function useHealth() {
+  return useSyncExternalStore(subscribeHealth, getHealthSnapshot, getHealthSnapshot)
+}
+
+/**
+ * A health bar, matching the ring on the map's three severity stops.
+ *
+ * Drawn at full health too, unlike the ring: here an absent bar already means
+ * the player is out, so hiding it at 100 would make "fine" and "dead" identical.
+ */
+function Health({ hp, status }: { hp: number; status: number }) {
+  if (status === KNOCKED) return <span className="hp hp-knocked">knocked</span>
+  if (status !== ALIVE) return null
+  const tone = hp > 60 ? 'ok' : hp > 25 ? 'warn' : 'bad'
+  return (
+    <span className={`hp hp-${tone}`} title={`${hp} health`}>
+      <span className="hp-bar">
+        <span className="hp-fill" style={{ width: `${hp}%` }} />
+      </span>
+      <span className="hp-num num">{hp}</span>
+    </span>
+  )
+}
+
 function TopBar({ match, bundle }: { match?: MatchDetail; bundle: ReplayBundle }) {
   const s = useReplayState()
   return (
@@ -219,6 +251,7 @@ function LoadoutOverlay({
   onClose: () => void
 }) {
   const s = useReplayState()
+  const health = useHealth()
   const player = bundle.players[playerIndex]
   return (
     <div className="loadout">
@@ -226,6 +259,10 @@ function LoadoutOverlay({
         <span className="dot-team" style={{ background: hex(teamColour(player?.t ?? 0)) }} />
         <strong>{player?.n}</strong>
         <span className="faint small">team {player?.t}</span>
+        <Health
+          hp={health.hp[playerIndex] ?? 0}
+          status={health.status[playerIndex] ?? 0}
+        />
         <div className="spacer" />
         <button className="loadout-close" onClick={onClose} title="stop following (Esc)">
           ✕
@@ -391,6 +428,9 @@ function TeamList({
   }, [bundle.players, tracked])
 
   const click = (i: number) => onFollow(follow === i ? null : i)
+  // Its own subscription: this is up to a hundred rows, and the main store
+  // notifies ten times a second because the playhead always moves.
+  const health = useHealth()
 
   return (
     <div className="panel panel-teams">
@@ -417,7 +457,8 @@ function TeamList({
               {tracked.has(m.acct) && (
                 <span className="dot-id" style={{ background: playerColour(m.acct) }} />
               )}
-              {m.name}
+              <span className="member-name">{m.name}</span>
+              <Health hp={health.hp[m.i] ?? 0} status={health.status[m.i] ?? 0} />
             </button>
           ))}
         </div>

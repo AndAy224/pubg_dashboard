@@ -225,6 +225,28 @@ Full list: BUILD-SPEC §6 (34 of them) and HANDOFF §5. The ones that bite most:
   because three values are cheaper to sum than to precompute.
 - **`roster.attributes.won` is the string `"true"`/`"false"`.** `bool("false")`
   is `True`.
+- **A `Character` block's `health` is sometimes the value *before* the event.**
+  `LogPlayerTakeDamage.victim.health` is pre-damage (1,900 corpus pairs agree
+  with `health - damage`, 134 with `health`) and `LogHeal.character.health` is
+  pre-heal (295 to 2). Stored raw, a player shows full health at the exact
+  instant you watch them get shot. `frames._HEALTH_DELTA` lists the corrections.
+- **A knocked player reports `health: 0`** — 31,153 of 31,156 DBNO snapshots
+  sit at exactly 0 — so "alive" cannot be read off health, and doing so hid
+  every knock. Worse, **51% of kill victims are still flagged `isDBNO` at the
+  moment of death**, so "alive or knocked" as a visibility test strands half of
+  every lobby's corpses on the map. Only the final death time tells them apart:
+  `FLAG_ALIVE` means *still in the match* and is resolved in `FrameIndex`.
+- **`LogHeal` is the third most common event in a match** (~4,000 of 37,000)
+  and is the only signal for health going *up*. It fires per heal tick, mostly
+  +1, so it is thinned on health delta — see `HEAL_MIN_DELTA`.
+- **`character.isInVehicle` includes the match-start aircraft**, so it is true
+  for the *entire lobby* for the first ~90 s, and 43% of in-vehicle samples are
+  aircraft, pickup balloons or a mounted mortar. Draw vehicle markers from
+  `FLAG_DRIVING`, which cross-references `LogVehicleRide.vehicle.vehicleType`
+  (`frames.DRIVEN_VEHICLES`). **Match phase is not a proxy** — it fails both
+  ways: 28 aircraft rides happen mid-match (flare-gun redeploys, with
+  `LogParachuteLanding` as late as `isGame` 5) and 17 real car rides happen
+  before `isGame` reaches 1.
 - **Zone field names are inverted.** `safetyZone*` is the **blue** damaging
   circle (interpolate); `poisonGasWarning*` is the **white** next circle
   (**snap** — it is a step function).
@@ -276,13 +298,18 @@ passed on a decoder that could not read a single bundle in the archive,
 because none of them execute it — that is what `npm test` is now for, and why
 the decoder has a corpus test as well as a synthetic one.
 
-**Point a real browser at it before theorising.** Three frontend bugs in a
-row were invisible to `tsc`, `oxlint`, `vitest` and the server logs — the last
+**Point a real browser at it before theorising.** Four frontend bugs in a
+row were invisible to `tsc`, `oxlint`, `vitest` and the server logs — one
 was a plain `TypeError` during render that React Router's error boundary
 swallowed, taking the whole page with it, and it took ten seconds to find once
-a browser was actually loading the page. `frontend/scripts/probe-replay.mjs`
-prints page errors, failed requests and a DOM summary, and writes a
-screenshot. HANDOFF §17 has the no-root setup for a headless Chrome.
+a browser was actually loading the page. The latest: every player dot drew
+*player 0*, because the CSR cursors are zero-filled and index 0 is inside
+player 0's row. A hundred dots stacked on one player looks like a quiet map
+rather than a broken one — the tell was the alive counter reading 97 against a
+bundle that says 51. `frontend/scripts/probe-replay.mjs` prints page errors,
+failed requests and a DOM summary, and writes a screenshot. HANDOFF §17 has the
+no-root setup for a headless Chrome — note `/tmp` here is an **821 MB tmpfs**,
+so stage the browser on `/`, or the download wedges every shell on the box.
 
 **There is no frontend test runner**
 

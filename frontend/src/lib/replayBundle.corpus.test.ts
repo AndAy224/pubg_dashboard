@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { decodeBundle } from './replayBundle'
+import {
+  decodeBundle,
+  FLAG_ALIVE,
+  FLAG_DBNO,
+  FLAG_DRIVING,
+  FLAG_IN_VEHICLE,
+  FLAG_PARACHUTING,
+} from './replayBundle'
 
 /**
  * The decoder against **real** bundles.
@@ -96,6 +103,106 @@ describe('real replay bundles', () => {
     // Health is a percentage; anything above 100 means the byte stream was
     // read at the wrong offset.
     expect(Math.max(...bundle.pos.hp)).toBeLessThanOrEqual(100)
+  })
+
+  /**
+   * The three health/liveness invariants the renderer draws from. All of them
+   * were violable before parser version 5, and each failed *plausibly*:
+   * knocked players simply never appeared, and a naive fix would have left
+   * corpses on the map instead.
+   */
+  it('resolves knocked, alive and dead so the renderer does not have to', async ({
+    skip,
+  }) => {
+    if (!(await apiReachable())) skip('no API reachable')
+
+    const ids = await matchIds(SAMPLE)
+    if (ids.length === 0) skip('no parsed matches')
+
+    let knocked = 0
+    let partialHealth = 0
+    for (const id of ids) {
+      const r = await fetch(`${BASE}/api/matches/${id}/replay`)
+      const bundle = decodeBundle(await r.arrayBuffer())
+      const { flags, hp, n } = bundle.pos
+
+      for (let i = 0; i < n; i++) {
+        // A knocked player is still in the match. The inverse — DBNO without
+        // ALIVE — is the ghost corpse: 51% of kill victims are flagged
+        // `isDBNO` at the instant they die, so any reader combining the bits
+        // itself would strand half the lobby on the map permanently.
+        if (flags[i]! & FLAG_DBNO) {
+          knocked++
+          expect(flags[i]! & FLAG_ALIVE, `${id} sample ${i} knocked but not alive`).toBeTruthy()
+        }
+        if (hp[i]! > 0 && hp[i]! < 100) partialHealth++
+      }
+
+      // Everyone the kill feed says died must actually leave the map. Their
+      // last sample is the death snapshot, and it must not read as alive.
+      for (const e of bundle.events) {
+        if (e.k !== 'kill') continue
+        const p = e.v as number
+        const end = bundle.pos.off[p + 1]
+        const start = bundle.pos.off[p]
+        if (end === undefined || start === undefined || end === start) continue
+        expect(
+          flags[end - 1]! & FLAG_ALIVE,
+          `${id} player ${p} died but their last sample still reads alive`,
+        ).toBeFalsy()
+      }
+    }
+
+    // Knocks exist at all. They were parsed the whole time and thrown away by
+    // the alive test, so "no knocked samples" is the regression to catch.
+    expect(knocked, 'knocked samples across the sample of matches').toBeGreaterThan(0)
+
+    // And health is a real gradient, not a dead 0/100 switch — which is what a
+    // misread section, or dropping the pre-damage correction, would look like.
+    expect(partialHealth, 'samples at partial health').toBeGreaterThan(0)
+  })
+
+  /**
+   * The whole lobby rides the aircraft at match start, so `FLAG_IN_VEHICLE` is
+   * set for everyone at once. If the steering-wheel marker ever keys on it
+   * again, this is what catches it.
+   */
+  it('does not call the match-start aircraft a driven vehicle', async ({ skip }) => {
+    if (!(await apiReachable())) skip('no API reachable')
+
+    const ids = await matchIds(SAMPLE)
+    if (ids.length === 0) skip('no parsed matches')
+
+    let driving = 0
+    let planePhaseInVehicle = 0
+    let planePhaseDriving = 0
+    for (const id of ids) {
+      const r = await fetch(`${BASE}/api/matches/${id}/replay`)
+      const { flags, n } = decodeBundle(await r.arrayBuffer()).pos
+      for (let i = 0; i < n; i++) {
+        const f = flags[i]!
+        if (f & FLAG_DRIVING) {
+          driving++
+          // Driving is a strict subset of being in a vehicle.
+          expect(f & FLAG_IN_VEHICLE, `${id} sample ${i} driving but not in a vehicle`).toBeTruthy()
+        }
+        if (f & FLAG_PARACHUTING) {
+          if (f & FLAG_IN_VEHICLE) planePhaseInVehicle++
+          if (f & FLAG_DRIVING) planePhaseDriving++
+        }
+      }
+    }
+
+    // Cars do get driven before `isGame` reaches 1 — 17 rides in the corpus —
+    // so this is not zero, and asserting zero would be asserting a bug. What
+    // must hold is that it stays a rounding error against everyone sitting in
+    // the plane.
+    expect(planePhaseInVehicle, 'plane-phase in-vehicle samples').toBeGreaterThan(0)
+    expect(
+      planePhaseDriving / planePhaseInVehicle,
+      'share of plane-phase in-vehicle samples flagged as driving',
+    ).toBeLessThan(0.05)
+    expect(driving, 'driving samples').toBeGreaterThan(0)
   })
 
   it('agrees with the match API on the kill count', async ({ skip }) => {

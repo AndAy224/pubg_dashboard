@@ -9,6 +9,7 @@ that the parser reads the stream correctly.
 from __future__ import annotations
 
 import collections
+import itertools
 import json
 import pathlib
 from typing import Any
@@ -22,7 +23,11 @@ from pubg_dashboard.telemetry.frames import (
     DEDUPE_MS,
     FLAG_ALIVE,
     FLAG_DBNO,
+    FLAG_DRIVING,
+    FLAG_IN_VEHICLE,
     FLAG_PARACHUTING,
+    HEAL_MIN_DELTA,
+    MAX_HEALTH,
     U16_MAX,
     FrameIndex,
 )
@@ -114,6 +119,18 @@ def test_kill_event_contributes_positions_for_both_parties() -> None:
     assert set(fi.accounts()) == {"v", "k"}
 
 
+def _kill_event(account: str, t: str, x: float = 1.0, y: float = 1.0, **kw: Any) -> dict[str, Any]:
+    """A death, for the frames tests. Named apart from the combat section's
+    `_kill` below, which shadows anything sharing its name."""
+    return {
+        "_T": "LogPlayerKillV2",
+        "_D": t,
+        "victim": _character(account, x, y, health=0, **kw),
+        "killer": _character("killer", x, y),
+        "common": {"isGame": 1.0},
+    }
+
+
 def test_flags_are_read_from_the_character_block() -> None:
     fi = FrameIndex(t0_ms=0, world_size=816_000)
     fi.feed(_position("a", "2026-07-22T00:00:00.000Z", 1.0, 1.0, is_game=0.10000000149011612))
@@ -123,7 +140,230 @@ def test_flags_are_read_from_the_character_block() -> None:
     assert a_flags & FLAG_PARACHUTING
     assert a_flags & FLAG_ALIVE
     assert b_flags & FLAG_DBNO
-    assert not b_flags & FLAG_ALIVE
+
+
+def _ride(account: str, t: str, vehicle_type: str) -> dict[str, Any]:
+    return {
+        "_T": "LogVehicleRide",
+        "_D": t,
+        "character": _character(account, 1.0, 1.0, isInVehicle=True),
+        "vehicle": {"vehicleType": vehicle_type, "vehicleId": "v1"},
+        "common": {"isGame": 1.0},
+    }
+
+
+def test_the_match_start_aircraft_is_a_vehicle_but_nobody_is_driving_it() -> None:
+    """The trap `FLAG_IN_VEHICLE` alone walks straight into.
+
+    `character.isInVehicle` is true for the **entire lobby** while the plane is
+    in the air, and 43% of in-vehicle samples across the corpus are aircraft,
+    pickup balloons or a mounted mortar (3,261 of 7,635). A marker keyed on
+    `FLAG_IN_VEHICLE` puts a steering wheel on all hundred players before
+    anyone has landed.
+    """
+    fi = FrameIndex(t0_ms=0, world_size=816_000)
+    fi.feed(_ride("a", "2026-07-22T00:00:01.000Z", "TransportAircraft"))
+    fi.feed(_position("a", "2026-07-22T00:00:05.000Z", 1.0, 1.0, isInVehicle=True))
+    flags = fi.samples_for("a")[-1].flags
+    assert flags & FLAG_IN_VEHICLE
+    assert not flags & FLAG_DRIVING
+
+
+@pytest.mark.parametrize(
+    ("vehicle_type", "driving"),
+    [
+        ("WheeledVehicle", True),
+        ("FloatingVehicle", True),
+        ("FlyingVehicle", True),
+        ("TransportAircraft", False),
+        ("EmergencyPickup", False),
+        ("Mortar", False),
+        # Every PUBG enum is open and casing moves between patches, so an
+        # unknown type must decline the flag rather than default it on.
+        ("SomeVehicleShippedNextPatch", False),
+        # ...and a known one must survive a casing change.
+        ("wheeledvehicle", True),
+    ],
+)
+def test_only_vehicles_driven_around_the_map_count(vehicle_type: str, driving: bool) -> None:
+    fi = FrameIndex(t0_ms=0, world_size=816_000)
+    fi.feed(_ride("a", "2026-07-22T00:00:01.000Z", vehicle_type))
+    fi.feed(_position("a", "2026-07-22T00:00:05.000Z", 1.0, 1.0, isInVehicle=True))
+    flags = fi.samples_for("a")[-1].flags
+    assert bool(flags & FLAG_DRIVING) is driving
+    assert flags & FLAG_IN_VEHICLE
+
+
+def test_leaving_a_vehicle_clears_the_flag_on_that_very_sample() -> None:
+    fi = FrameIndex(t0_ms=0, world_size=816_000)
+    fi.feed(_ride("a", "2026-07-22T00:00:01.000Z", "WheeledVehicle"))
+    fi.feed(_position("a", "2026-07-22T00:00:05.000Z", 1.0, 1.0, isInVehicle=True))
+    assert fi.samples_for("a")[-1].flags & FLAG_DRIVING
+    fi.feed(
+        {
+            "_T": "LogVehicleLeave",
+            "_D": "2026-07-22T00:00:09.000Z",
+            "character": _character("a", 1.0, 1.0, isInVehicle=False),
+            "vehicle": {"vehicleType": "WheeledVehicle", "vehicleId": "v1"},
+            "common": {"isGame": 1.0},
+        }
+    )
+    assert not fi.samples_for("a")[-1].flags & FLAG_DRIVING
+
+
+def test_occupancy_comes_from_the_character_not_the_ride_index() -> None:
+    """A missed `LogVehicleLeave` must not strand a player in a phantom car.
+
+    The ride index only ever names the vehicle; `isInVehicle` decides whether
+    they are in one. Without that gate a dropped dismount would leave the
+    marker on for the rest of the match.
+    """
+    fi = FrameIndex(t0_ms=0, world_size=816_000)
+    fi.feed(_ride("a", "2026-07-22T00:00:01.000Z", "WheeledVehicle"))
+    # No leave event — but the character says they are on foot.
+    fi.feed(_position("a", "2026-07-22T00:00:20.000Z", 1.0, 1.0, isInVehicle=False))
+    flags = fi.samples_for("a")[-1].flags
+    assert not flags & FLAG_DRIVING
+    assert not flags & FLAG_IN_VEHICLE
+
+
+def test_a_knocked_player_is_still_flagged_alive() -> None:
+    """`health > 0` is not the same question as "still in the match".
+
+    A knocked player reports `health: 0` — 31,153 of 31,156 DBNO snapshots in
+    the corpus sit at exactly 0 — so reading the alive bit off health hid every
+    knock, and `LogPlayerPosition` keeps firing for a knocked player. In a squad
+    fight the knock is most of the story.
+    """
+    fi = FrameIndex(t0_ms=0, world_size=816_000)
+    fi.feed(_position("b", "2026-07-22T00:00:00.000Z", 1.0, 1.0, isDBNO=True, health=0))
+    flags = fi.samples_for("b")[0].flags
+    assert flags & FLAG_ALIVE
+    assert flags & FLAG_DBNO
+
+
+def test_a_kill_clears_both_bits_even_though_the_victim_reads_dbno() -> None:
+    """The trap that forces this to be resolved in the parser.
+
+    At `LogPlayerKillV2` the victim's `isDBNO` is **true in 51% of deaths**
+    (979 of 1,918 across the corpus). So "alive or knocked" cannot be recovered
+    from a sample's own bits — a frontend applying that test would leave half
+    of every lobby's corpses on the map forever, as knocked players who never
+    get up.
+    """
+    fi = FrameIndex(t0_ms=0, world_size=816_000)
+    fi.feed(_position("v", "2026-07-22T00:00:00.000Z", 1.0, 1.0, isDBNO=True, health=0))
+    fi.feed(_kill_event("v", "2026-07-22T00:00:05.000Z", isDBNO=True))
+    samples = fi.samples_for("v")
+    assert samples[0].flags & FLAG_ALIVE, "knocked, still playing"
+    assert not samples[-1].flags & FLAG_ALIVE, "dead"
+    assert not samples[-1].flags & FLAG_DBNO, "dead, not knocked"
+
+
+def test_the_last_death_wins_so_a_respawn_is_not_blanked() -> None:
+    """Seven players in the corpus died three times.
+
+    Keying on the *first* death would flag them eliminated for the rest of a
+    match they are still playing — the same reason `combat` and the inventory
+    state machine both key on the last one.
+
+    The stated limit: between an earlier death and the respawn the player still
+    reads as in the match. Telemetry has no respawn event, and no archived
+    match is a comeback mode, so there is nothing to measure the gap against —
+    guessing it would be exactly the plausible-looking invention this parser
+    exists to avoid. The final death, which is what removes a player from the
+    map, is always right.
+    """
+    fi = FrameIndex(t0_ms=0, world_size=816_000)
+    fi.feed(_kill_event("v", "2026-07-22T00:00:05.000Z"))
+    fi.feed(_position("v", "2026-07-22T00:00:20.000Z", 1.0, 1.0))
+    fi.feed(_kill_event("v", "2026-07-22T00:00:30.000Z"))
+    samples = fi.samples_for("v")
+    # Absolute epoch ms, the same clock as `Sample.t_ms` — which is what
+    # `_resolve` compares against.
+    assert fi.death_ms("v") == reader.ts_ms("2026-07-22T00:00:30.000Z")
+    alive = [bool(s.flags & FLAG_ALIVE) for s in samples]
+    assert alive == [True, True, False]
+
+
+def test_take_damage_health_is_corrected_to_the_value_after_the_shot() -> None:
+    """`LogPlayerTakeDamage.victim.health` is the health *before* the damage.
+
+    Measured over the corpus: 1,900 consecutive pairs agree with
+    `health - damage`, 134 with `health` unchanged. Stored raw, a player reads
+    at their fullest for up to 10 s starting from the instant they are shot —
+    which is precisely when someone is watching.
+    """
+    fi = FrameIndex(t0_ms=0, world_size=816_000)
+    fi.feed(
+        {
+            "_T": "LogPlayerTakeDamage",
+            "_D": "2026-07-22T00:00:01.000Z",
+            "attacker": _character("k", 500.0, 500.0),
+            "victim": _character("v", 1000.0, 1000.0, health=90),
+            "damage": 62.0,
+            "common": {"isGame": 1.0},
+        }
+    )
+    assert fi.samples_for("v")[0].health == pytest.approx(28.0)
+    # The attacker's own snapshot is untouched — they were not the one hit.
+    assert fi.samples_for("k")[0].health == pytest.approx(100.0)
+
+
+def test_damage_beyond_remaining_health_clamps_to_zero() -> None:
+    fi = FrameIndex(t0_ms=0, world_size=816_000)
+    fi.feed(
+        {
+            "_T": "LogPlayerTakeDamage",
+            "_D": "2026-07-22T00:00:01.000Z",
+            "victim": _character("v", 1.0, 1.0, health=12),
+            "damage": 100.0,
+            "common": {"isGame": 1.0},
+        }
+    )
+    assert fi.samples_for("v")[0].health == 0.0
+
+
+def test_heal_health_is_corrected_and_ticks_are_thinned() -> None:
+    """`LogHeal.character.health` is pre-heal (295 corpus pairs to 2), and the
+    event fires per tick — ~4,000 a match, mostly +1 of boost regeneration.
+
+    Keeping all of them cost 40% more samples and 21% more bundle for a bar a
+    few pixels tall, so they are thinned on health delta. Thinning on the delta
+    rather than on time is what bounds the error: the renderer steps health, and
+    each kept sample resets the baseline.
+    """
+    fi = FrameIndex(t0_ms=0, world_size=816_000)
+    for i in range(12):
+        fi.feed(
+            {
+                "_T": "LogHeal",
+                # Spread past DEDUPE_MS, so thinning is what is being measured
+                # and not the dedupe window.
+                "_D": f"2026-07-22T00:00:{i:02d}.000Z",
+                "character": _character("a", 1.0, 1.0, health=50 + i),
+                "healAmount": 1,
+                "common": {"isGame": 1.0},
+            }
+        )
+    healths = [s.health for s in fi.samples_for("a")]
+    # First tick is kept unconditionally (no baseline), then every 5 points.
+    assert healths == [51.0, 56.0, 61.0]
+    assert max(abs(a - b) for a, b in itertools.pairwise(healths)) <= HEAL_MIN_DELTA
+
+
+def test_health_never_exceeds_full() -> None:
+    fi = FrameIndex(t0_ms=0, world_size=816_000)
+    fi.feed(
+        {
+            "_T": "LogHeal",
+            "_D": "2026-07-22T00:00:01.000Z",
+            "character": _character("a", 1.0, 1.0, health=98),
+            "healAmount": 20,
+            "common": {"isGame": 1.0},
+        }
+    )
+    assert fi.samples_for("a")[0].health == MAX_HEALTH
 
 
 def test_csr_offsets_partition_the_arrays() -> None:

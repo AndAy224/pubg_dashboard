@@ -1,10 +1,10 @@
 import { Application, Assets, Container, Graphics, Sprite, Text, Texture } from 'pixi.js'
 import type { ReplayBundle } from '../../lib/replayBundle'
-import { FLAG_ALIVE, FLAG_DBNO, FLAG_IN_VEHICLE, NULL_PLAYER } from '../../lib/replayBundle'
+import { FLAG_ALIVE, FLAG_DBNO, FLAG_DRIVING, FLAG_IN_VEHICLE, NULL_PLAYER } from '../../lib/replayBundle'
 import { BOT_COLOUR, teamColour } from '../../lib/palette'
 import { playerColourInt } from '../../lib/players'
 import { Viewport } from './Viewport'
-import { publish } from '../store'
+import { ALIVE, KNOCKED, OUT, publish, publishHealth } from '../store'
 
 /**
  * The replay renderer.
@@ -32,6 +32,83 @@ const LABEL_SCALE = 0.55
  * the same *amount of combat* visible at every speed.
  */
 const TRACER_MS = 1200
+
+/**
+ * Health ring geometry, in world units before the counter-scale.
+ *
+ * The ring sits outside the dot rather than filling it, so the dot body keeps
+ * carrying the identity/team colour — that hue is how you find your squad in a
+ * hundred-dot lobby, and a health-coloured dot would destroy it.
+ *
+ * The radius has to clear two things, and the dot's own size is the smaller of
+ * them: the marker is a **square** sprite, so its corners reach `DOT_R * √2`
+ * (7.07), not `DOT_R`. The tracked player's white ring is the real constraint
+ * — it ends at `DOT_R + 3 + 1` = 9 — so the health ring goes outside that and
+ * stays concentric with both.
+ */
+const HP_RING_R = DOT_R + 5
+const HP_RING_W = 1.8
+
+/**
+ * Health is quantised to this many steps before deciding to redraw.
+ *
+ * A `Graphics` arc cannot be transformed into a different arc — changing the
+ * sweep means re-tessellating it — so redrawing 100 of them every frame is
+ * real work. Health only has to *look* continuous, and 5% steps are well under
+ * one pixel of arc at any zoom the map is legible at.
+ */
+const HP_STEPS = 20
+
+/**
+ * Severity ramp. Deliberately only three stops: the ring answers "should I be
+ * worried", and a continuous gradient reads as noise at 10 px.
+ */
+function healthColour(hp: number): number {
+  if (hp > 60) return 0x4ade80
+  if (hp > 25) return 0xfbbf24
+  return 0xf87171
+}
+
+/** Texture-space radius of the steering wheel. Drawn large, scaled down. */
+const WHEEL_R = 30
+
+/**
+ * The steering-wheel marker, rasterised once and shared by every dot.
+ *
+ * It **replaces** the square rather than sitting on top of it, so the marker
+ * still carries exactly one colour — the player's — and the map does not gain
+ * a second overlapping thing per dot. It occupies the same footprint the
+ * enlarged in-vehicle square already did, so no other ring has to move.
+ *
+ * Drawn white over a fat black pass. `tint` multiplies, so the black survives
+ * as an outline while the white takes the player's identity colour — which is
+ * what keeps the glyph legible on all 24 team hues *and* on satellite imagery
+ * that is bright in the towns and near-black in the water.
+ *
+ * Returns null rather than throwing: a marker that cannot be built is worth a
+ * plain square, not a dead replay.
+ */
+function buildWheelTexture(app: Application): Texture | null {
+  try {
+    const g = new Graphics()
+    // Three spokes from 12 o'clock, the shape everyone reads as a wheel.
+    const spokes = [-Math.PI / 2, Math.PI / 6, (5 * Math.PI) / 6]
+    for (const [width, colour] of [
+      [14, 0x000000],
+      [7, 0xffffff],
+    ] as const) {
+      g.circle(0, 0, WHEEL_R - width / 2).stroke({ width, color: colour })
+      for (const a of spokes) {
+        g.moveTo(0, 0).lineTo(Math.cos(a) * WHEEL_R, Math.sin(a) * WHEEL_R)
+      }
+      g.stroke({ width, color: colour })
+      g.circle(0, 0, width).fill({ color: colour })
+    }
+    return app.renderer.generateTexture({ target: g, resolution: 2, antialias: true })
+  } catch {
+    return null
+  }
+}
 
 interface Options {
   bundle: ReplayBundle
@@ -63,6 +140,15 @@ export class Renderer {
 
   private readonly dots: Sprite[] = []
   private readonly rings: Graphics[] = []
+  /** Health ring per player, redrawn only when the drawn state changes. */
+  private readonly hpRings: Graphics[] = []
+  /** Last state each health ring was drawn for; -1 means "never drawn". */
+  private readonly hpDrawn: Int16Array
+  /** Live health for the DOM panels. Written in place, never reallocated. */
+  private readonly hpOut: Uint8Array
+  private readonly statusOut: Uint8Array
+  /** Bumped when `hpOut`/`statusOut` changed, so the store can skip the rest. */
+  private hpVersion = 0
   /** Built lazily — a hundred `Text` objects up front is a hundred canvas
    *  rasterisations, and most are never shown. */
   private readonly labels: (Text | null)[] = []
@@ -75,6 +161,8 @@ export class Renderer {
   /** Lower bound into `hits`, advanced monotonically like the position cursors. */
   private hitCursor = 0
   private _headShotIndex: number | undefined
+  /** Shared steering-wheel marker; null if it could not be rasterised. */
+  private readonly wheelTexture: Texture | null
 
   /** Playhead, in milliseconds since t0. A ref, never React state. */
   nowMs = 0
@@ -88,7 +176,22 @@ export class Renderer {
     this.app = app
     this.opts = opts
     const b = opts.bundle
+    // **Seed each cursor at its own CSR row.** Zero-filled is not a neutral
+    // starting point: index 0 is inside *player 0's* row, so until something
+    // triggered `resetCursors` every player read player 0's position, health
+    // and flags. A hundred dots stacked on one player looks like a quiet map
+    // rather than a broken one, and the alive counter read 97 where the bundle
+    // says 51. `resetCursors` only runs on a *backwards* seek, so a fresh load
+    // — the common case — never corrected it.
     this.cursor = new Int32Array(b.players.length)
+    for (let p = 0; p < b.players.length; p++) this.cursor[p] = b.pos.off[p]!
+    this.hpDrawn = new Int16Array(b.players.length).fill(-1)
+    this.hpOut = new Uint8Array(b.players.length)
+    this.statusOut = new Uint8Array(b.players.length)
+    this.wheelTexture = buildWheelTexture(app)
+    if (this.wheelTexture === null) {
+      opts.onError?.('the in-vehicle marker could not be built; dots stay square')
+    }
     // World units are source-image pixels, so the cm->px transform is the same
     // one the tiles were cut with (including the 8160/8192 correction).
     this.worldPx = opts.sourcePx
@@ -178,6 +281,57 @@ export class Renderer {
       ring.visible = false
       this.rings.push(ring)
       this.dotLayer.addChild(ring)
+
+      // Health ring. Added before the tracked ring in z-order would put it
+      // over the white outline, so it goes last and sits outside everything.
+      const hp = new Graphics()
+      hp.visible = false
+      this.hpRings.push(hp)
+      this.dotLayer.addChild(hp)
+    }
+  }
+
+  /** Record a player's health for the DOM panels, noting whether it moved. */
+  private setHealth(p: number, hp: number, status: number): void {
+    if (this.hpOut[p] === hp && this.statusOut[p] === status) return
+    this.hpOut[p] = hp
+    this.statusOut[p] = status
+    this.hpVersion++
+  }
+
+  /**
+   * Redraw one player's health ring, if the state it shows has changed.
+   *
+   * `state` is the quantised health, or -1 for knocked. Returns nothing; the
+   * caller positions and scales the ring, which are transforms and therefore
+   * free.
+   */
+  private drawHealthRing(p: number, state: number): void {
+    if (this.hpDrawn[p] === state) return
+    this.hpDrawn[p] = state
+    const g = this.hpRings[p]!
+    g.clear()
+
+    if (state < 0) {
+      // Knocked. A full red ring rather than an empty one: health is genuinely
+      // 0 here, so a proportional arc would draw nothing at all and a knocked
+      // player would look identical to a healthy one.
+      g.circle(0, 0, HP_RING_R).stroke({ width: HP_RING_W, color: 0xf87171, alpha: 0.95 })
+      return
+    }
+
+    const hp = (state / HP_STEPS) * 100
+    // The unfilled remainder, so the ring reads as a gauge rather than as a
+    // stray arc whose length you have to guess against nothing.
+    g.circle(0, 0, HP_RING_R).stroke({ width: HP_RING_W, color: 0x000000, alpha: 0.5 })
+    if (state > 0) {
+      // Clockwise from 12 o'clock, like every health dial in the game.
+      const start = -Math.PI / 2
+      g.arc(0, 0, HP_RING_R, start, start + (hp / 100) * Math.PI * 2).stroke({
+        width: HP_RING_W,
+        color: healthColour(hp),
+        alpha: 0.95,
+      })
     }
   }
 
@@ -336,11 +490,14 @@ export class Renderer {
       const end = b.pos.off[p + 1]!
       const dot = this.dots[p]!
       const ring = this.rings[p]!
+      const hpRing = this.hpRings[p]!
       const existingLabel = this.labels[p]
       if (start === end) {
         dot.visible = false
         ring.visible = false
+        hpRing.visible = false
         if (existingLabel) existingLabel.visible = false
+        this.setHealth(p, 0, OUT)
         continue
       }
 
@@ -354,7 +511,9 @@ export class Renderer {
         // Player has not appeared yet.
         dot.visible = false
         ring.visible = false
+        hpRing.visible = false
         if (existingLabel) existingLabel.visible = false
+        this.setHealth(p, 0, OUT)
         continue
       }
 
@@ -373,11 +532,17 @@ export class Renderer {
       }
 
       const flags = b.pos.flags[c]!
+      // "Still in the match", knocked included — parser version 5 resolves
+      // this against the final death, so a knocked player is drawn and a dead
+      // one is not. Before that this bit meant `health > 0` and every knock
+      // was invisible.
       const isAlive = (flags & FLAG_ALIVE) !== 0
       dot.visible = isAlive
       if (!isAlive) {
         ring.visible = false
+        hpRing.visible = false
         if (existingLabel) existingLabel.visible = false
+        this.setHealth(p, 0, OUT)
         continue
       }
       alive++
@@ -385,6 +550,12 @@ export class Renderer {
       dot.position.set(x, y)
       const dbno = (flags & FLAG_DBNO) !== 0
       dot.alpha = b.players[p]!.b ? 0.45 : dbno ? 0.5 : 1
+
+      // Health is **stepped, not interpolated**: it jumps on a hit, and a ramp
+      // between samples would show a player at 60 when they are at 10. Only
+      // position is continuous enough to interpolate.
+      const hp = b.pos.hp[c]!
+      this.setHealth(p, hp, dbno ? KNOCKED : ALIVE)
 
       const followed = this.viewport.isFollowing === p
       const tracked = this.opts.tracked.has(b.players[p]!.a)
@@ -397,6 +568,17 @@ export class Renderer {
       // world is scaled to about 0.11, so a player rendered **1.1 pixels
       // across**. They were not ambiguous, they were nearly invisible.
       const inv = 1 / this.viewport.scale
+
+      // A steering wheel while they are in something they drive around the
+      // map. **`FLAG_DRIVING`, not `FLAG_IN_VEHICLE`** — the match-start
+      // aircraft is a vehicle, so the latter would put a wheel on all hundred
+      // players before anyone has landed.
+      const wheel = (flags & FLAG_DRIVING) !== 0 && this.wheelTexture !== null
+      const texture = wheel ? this.wheelTexture! : Texture.WHITE
+      // Assigned before the size, because `width` is derived from the
+      // texture's own dimensions — swapping after would rescale the marker.
+      if (dot.texture !== texture) dot.texture = texture
+
       const size = DOT_R * 2 * ((flags & FLAG_IN_VEHICLE) !== 0 ? 1.4 : 1) * inv
       dot.width = size
       dot.height = size
@@ -404,6 +586,18 @@ export class Renderer {
       if (tracked) {
         ring.position.set(x, y)
         ring.scale.set(inv)
+      }
+
+      // **Only when it says something.** A ring on every player at 100 health
+      // is a hundred rings carrying no information, and at fit zoom that is
+      // solid clutter over the map. It appears when someone is hurt, which is
+      // exactly when the eye should be pulled to them.
+      const showHp = dbno || hp < 100
+      hpRing.visible = showHp
+      if (showHp) {
+        this.drawHealthRing(p, dbno ? -1 : Math.round((hp / 100) * HP_STEPS))
+        hpRing.position.set(x, y)
+        hpRing.scale.set(inv)
       }
 
       // Everyone gets a name once you are zoomed in; before that only the
@@ -430,6 +624,7 @@ export class Renderer {
     this.drawZones(tick)
     this.drawTracers(tick)
     publish({ nowMs: this.nowMs, alive, playing: this.playing, speed: this.speed })
+    publishHealth(this.hpOut, this.statusOut, this.hpVersion)
   }
 
   /**

@@ -31,12 +31,35 @@ import { decode } from '@msgpack/msgpack'
  * not worth padding the format to avoid.
  */
 
+/**
+ * Still in the match — **including knocked**. Resolved server-side against
+ * each account's final death, not from `hp > 0`.
+ *
+ * Do not try to recover "knocked but not dead" as `FLAG_DBNO && !FLAG_ALIVE`
+ * from an older bundle: at the moment of death 51% of victims are still
+ * flagged `isDBNO`, so that test leaves half the corpses on the map forever.
+ * Parser version 5 is what makes these two bits independent and correct.
+ */
 export const FLAG_ALIVE = 1 << 0
+/** Knocked and not yet finished off. Implies `FLAG_ALIVE`. */
 export const FLAG_DBNO = 1 << 1
+/**
+ * In *any* vehicle, straight from `character.isInVehicle`.
+ *
+ * **Not the flag to draw a vehicle marker from.** The match-start aircraft is
+ * a vehicle, so this is true for the entire lobby for the first minute and a
+ * half, and 43% of in-vehicle samples are aircraft, pickup balloons or a
+ * mounted mortar. Use `FLAG_DRIVING`.
+ */
 export const FLAG_IN_VEHICLE = 1 << 2
 export const FLAG_BLUE_ZONE = 1 << 3
 export const FLAG_RED_ZONE = 1 << 4
 export const FLAG_PARACHUTING = 1 << 5
+/**
+ * In a vehicle that is driven around the map — car, boat or glider. Implies
+ * `FLAG_IN_VEHICLE`. Passengers included. Requires parser version 6.
+ */
+export const FLAG_DRIVING = 1 << 6
 
 /** No player index 255 exists in a <=100-player lobby. */
 export const NULL_PLAYER = 255
@@ -87,6 +110,11 @@ export interface ReplayBundle {
     t: Uint16Array
     x: Uint16Array
     y: Uint16Array
+    /**
+     * Health, 0..100, already corrected to the value *after* the event that
+     * produced the sample. **Step it, never interpolate it** — health jumps on
+     * a hit, and a smooth ramp would show a player at 60 while they are at 10.
+     */
     hp: Uint8Array
     flags: Uint8Array
   }

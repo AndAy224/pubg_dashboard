@@ -746,7 +746,9 @@ The box has no browser and `sudo` needs a password nobody has. It is still
 entirely doable:
 
 ```bash
-S=/tmp/probe && mkdir -p $S && cd $S
+S=$HOME/.cache/probe && mkdir -p $S && cd $S    # NOT /tmp: it is an 821 MB
+                                                # tmpfs, and filling it wedges
+                                                # every shell on the box
 # 1. Chrome for Testing. `npm i puppeteer` fails here: its extractor needs
 #    `unzip`, which is not installed. Fetch and unpack it directly instead.
 curl -sSL -o chs.zip https://storage.googleapis.com/chrome-for-testing-public/150.0.7871.24/linux64/chrome-headless-shell-linux64.zip
@@ -770,8 +772,13 @@ cp -r ../libs/usr/share/fonts/truetype/dejavu/* ~/.local/share/fonts/   # or no 
 export LD_LIBRARY_PATH=$(find $S/libs -name '*.so*' -printf '%h\n' | sort -u | tr '\n' ':')
 export CHROME=$S/chrome/chrome-headless-shell-linux64/chrome-headless-shell
 cd <repo>/frontend && PUPPETEER_SKIP_DOWNLOAD=1 npm i puppeteer   # binary already present
-node scripts/probe-replay.mjs <matchId> --t=600 --shot=/tmp/replay.png
+node scripts/probe-replay.mjs <matchId> --t=600 --shot=$S/replay.png
 ```
+
+Revert `package.json`/`package-lock.json` afterwards — puppeteer is an
+ad-hoc tool here, not a dependency of the app, and `node_modules` keeps it
+for the rest of the session either way. Mouse-wheel events time out under
+swiftshader, so drive zoom through the app rather than `page.mouse.wheel`.
 
 `--enable-unsafe-swiftshader --use-gl=angle --use-angle=swiftshader` gives
 real WebGL with no GPU. WebGPU is unavailable and logs "No available
@@ -929,3 +936,134 @@ parser package for weeks.
 `git ls-files <path>` to ask whether a file is tracked and
 `git check-ignore -v <path>` to find the rule to blame — and when it matters,
 clone the remote and run it.
+
+---
+
+## 21. Health on the replay map — added 2026-07-23
+
+Player dots now carry a **radial health ring**, like the in-game replay: a dark
+track with an arc sweeping clockwise from 12 o'clock, green above 60, amber
+above 25, red below. The rail's team list gained a matching bar and the exact
+number, on its own store subscription. A knocked player is a **full red ring**.
+
+The ring only appears when it says something — full health draws nothing. At
+fit zoom a hundred rings is solid clutter over the map, and "everyone is fine"
+is not worth a hundred marks; the ring appearing *is* the signal.
+
+`pos.hp` was already in every bundle and had never been drawn. Wiring it up
+took a parser version bump anyway, because all three of the things it needed
+were wrong, and every one of them rendered plausibly.
+
+### `LogPlayerTakeDamage.victim.health` is the health *before* the shot
+
+Measured across the corpus by comparing consecutive damage events on the same
+victim: **1,900 pairs agree with `health - damage`, 134 with `health`**. Stored
+raw — which is what `frames` did — a player reads at their fullest for up to
+the full 10 s position interval *starting from the instant they are hit*, which
+is precisely the moment someone is watching them. `LogHeal` is the same shape:
+`character.health` is pre-heal, 295 pairs to 2.
+
+### `LogHeal` was not a health source at all
+
+It is the **third most common event in a match** (~4,000 of 37,000) and fires
+once per heal tick — which is to say, exactly and only when health is moving
+upwards. Without it a player who bandages from 20 to 100 read as 20 until the
+next position report.
+
+Taking every tick cost **+40% samples and +21% bundle** to animate a bar a few
+pixels tall, because most ticks are +1 of boost regeneration. They are now
+thinned on *health delta* (`HEAL_MIN_DELTA`, 5 points), not on time — the
+renderer steps health rather than interpolating it and each kept sample resets
+the baseline, so the drawn value trails the true one by strictly less than the
+threshold. That is a statable error rather than a hopeful one. Cost is now
+**+1.7% bundle**. Damage is never thinned; a hit is when the number matters.
+
+### `FLAG_ALIVE` meant `health > 0`, and knocked players report `health: 0`
+
+31,153 of 31,156 DBNO snapshots sit at exactly 0. So every knocked player was
+flagged dead and the renderer hid them — `LogPlayerPosition` keeps firing while
+knocked, so those dots existed and were simply never drawn. In a squad mode the
+knock is most of the story, and `Renderer`'s `dbno ? 0.5 : 1` alpha branch had
+never been reachable.
+
+**And it cannot be fixed in the renderer.** At `LogPlayerKillV2` the victim's
+`isDBNO` is **true in 51% of deaths** (979 of 1,918), so "alive or knocked" as
+a visibility test leaves half of every lobby's corpses on the map forever as
+knocked players who never get up. Only the final death time separates the two,
+and only the parser knows it. `FLAG_ALIVE` now means *still in the match*,
+resolved in `FrameIndex.build`; `FLAG_DBNO` implies it.
+
+Stated limit: between an earlier death and a respawn a player still reads as in
+the match. Telemetry has no respawn event and no archived match is a comeback
+mode, so there is nothing to measure the gap against.
+
+### Every dot was drawing player 0 — a pre-existing renderer bug
+
+Found only because the health ring made it visible. `Renderer`'s per-player CSR
+cursors are a zero-filled `Int32Array`, and **index 0 is inside player 0's
+row**, so until something triggered `resetCursors` every player read player 0's
+position, health and flags. `resetCursors` runs only on a *backwards* seek, so
+a fresh load — the common case — never corrected it.
+
+A hundred dots stacked on one player looks like a quiet map, not a broken one.
+The tell was the counter: the top bar said **97 alive** where the bundle says
+**51**, with 50 kills already in the feed. Cursors are now seeded at `off[p]`.
+After the fix the browser reports 51, matching the bundle exactly.
+
+This is the fourth replay bug in a row that `tsc`, `oxlint` and `vitest` all
+passed. **Point a browser at it.** §17 has the no-root setup — note `/tmp` on
+this box is a **821 MB tmpfs**, so stage Chrome somewhere on `/` (there is 60 G
+free) or the download will wedge every shell on the machine.
+
+---
+
+## 22. Steering wheel for players in a vehicle — added 2026-07-23
+
+The dot's square swaps to a **steering wheel** glyph while the player is in a
+vehicle: rim, three spokes, hub, drawn white over a fat black pass and tinted
+with the player's identity colour. It replaces the square rather than sitting
+on it, so the marker still carries exactly one colour and no other ring has to
+move — it occupies the same footprint the existing 1.4x in-vehicle enlargement
+already used. Rasterised once via `generateTexture` and shared by every dot; if
+that fails the renderer reports it and keeps plain squares.
+
+### `isInVehicle` is true for the whole lobby at match start
+
+The transport aircraft is a vehicle. Keyed on `FLAG_IN_VEHICLE` the marker puts
+a steering wheel on **all 99 players** before anyone has landed — verified by
+screenshot, then verified absent after the fix.
+
+Across the corpus, **3,261 of 7,635 in-vehicle position samples (43%) are not
+something you drive**: the match-start aircraft, the flare-gun redeploy plane,
+the emergency pickup balloon, and a mounted mortar.
+
+**Match phase is not a usable proxy, and this is the part worth remembering.**
+It looks like one — plane phase is when everybody is on the aircraft — but it
+is wrong in both directions:
+
+* **28 aircraft rides happen mid-match.** Flare-gun redeploys are real;
+  `LogParachuteLanding` fires as late as `isGame` 5.
+* **17 car rides happen during the plane phase.** `isGame` is still 0.1 for a
+  while after the first players land, so suppressing by phase hides genuine
+  early driving.
+
+So `frames` tracks `LogVehicleRide`/`LogVehicleLeave` per account and sets the
+new `FLAG_DRIVING` (bit 6) only for `WheeledVehicle`, `FloatingVehicle` and
+`FlyingVehicle`. Measured coverage is **complete** — every one of the 7,635
+in-vehicle samples had a preceding ride event, none unknown — which is what
+makes the cross-reference trustworthy rather than best-effort.
+
+Two deliberate constraints on that state machine:
+
+* **`isInVehicle` still decides occupancy**; the ride index is only ever
+  consulted to *name* the vehicle. A dropped `LogVehicleLeave` therefore cannot
+  strand a player in a phantom car for the rest of the match.
+* **Unknown types decline the flag.** Every PUBG enum is open and casing moves
+  between patches, so a vehicle shipped next patch gets no marker rather than
+  the whole lobby getting one.
+
+Passengers count — the question is what the vehicle *is*, not who holds the
+wheel, so `seatIndex` is deliberately not consulted.
+
+`pos.flags` was already a byte with three spare bits, so this cost nothing:
+bundle size is unchanged at ~113 KB.

@@ -143,16 +143,37 @@
 .replay .team { margin-bottom: 8px; }
 .replay .team-head { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-faint); padding: 2px 0; }
 .replay .member {
-  display: block; width: 100%; text-align: left;
+  display: flex; align-items: center; gap: 6px; width: 100%; text-align: left;
   background: none; border: none; padding: 3px 8px; border-radius: 4px; font-size: 12px;
 }
 .replay .member:hover { background: var(--bg-raised); }
+/* The name yields to the health bar rather than wrapping — the bar is a fixed
+   width, so a long name must be what truncates. */
+.replay .member-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .replay .dot-id {
   display: inline-block; width: 7px; height: 7px; border-radius: 50%;
-  margin-right: 6px; vertical-align: 1px;
+  flex: 0 0 7px;
 }
 .replay .member.on { background: var(--accent); color: #1a1205; font-weight: 600; }
 .replay .member.isbot { color: var(--bot); }
+
+/* --- Health --------------------------------------------------------------- */
+/* The same three severity stops as the ring on the map. Unlike the ring, the
+   bar is drawn at full health too: in a fixed list of rows the absence of a bar
+   already means something else — that the player is out — so hiding it at 100
+   would make "fine" and "dead" look identical. On the map there is no row, and
+   a hundred full rings is just clutter. */
+.replay .hp { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; }
+.replay .hp-bar {
+  display: block; width: 34px; height: 4px; border-radius: 2px;
+  background: rgba(255, 255, 255, .16); overflow: hidden;
+}
+.replay .hp-fill { display: block; height: 100%; background: currentColor; }
+.replay .hp-num { font-size: 10px; width: 18px; text-align: right; color: var(--text-faint); }
+.replay .hp-ok { color: #4ade80; }
+.replay .hp-warn { color: #fbbf24; }
+.replay .hp-bad { color: #f87171; }
+.replay .hp-knocked { font-size: 10px; color: #f87171; text-transform: uppercase; letter-spacing: .04em; }
 
 /* Rendered *instead of* `.replay`, never inside it — the one selector in this
    file that cannot be scoped. */

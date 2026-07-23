@@ -41,7 +41,23 @@ BUNDLE_VERSION: Final = 1
 #:     filtered to the same match types career stats count. Migration 0003.
 #: 4 — the bundle gained a `hits` section: attributed hits with both endpoints,
 #:     so the replay can draw combat tracers.
-PARSER_VERSION: Final = 4
+#: 5 — `pos.hp` is now trustworthy, and `pos.flags` means something different.
+#:     Three separate faults, all of which rendered plausibly:
+#:     (a) `LogPlayerTakeDamage.victim.health` is the health *before* the shot
+#:         and was stored raw, so a player read at their fullest for up to 10 s
+#:         starting from the instant they were hit;
+#:     (b) `LogHeal` was not a health source at all, so healing was invisible;
+#:     (c) `FLAG_ALIVE` meant `health > 0`, which is false for every knocked
+#:         player, so knocks were hidden — and it cannot be fixed in the
+#:         renderer, because 51% of kill victims are flagged `isDBNO` at the
+#:         moment of death. `FLAG_ALIVE` now means "still in the match" and is
+#:         resolved against each account's final death. See `frames`.
+#: 6 — `pos.flags` gained `FLAG_DRIVING`: in a vehicle that is actually driven
+#:     around the map. `FLAG_IN_VEHICLE` alone cannot mean that — the
+#:     match-start aircraft is a vehicle, so it is set for the entire lobby at
+#:     once, and 43% of in-vehicle samples are aircraft, pickup balloons or a
+#:     mounted mortar. See `frames.DRIVEN_VEHICLES`.
+PARSER_VERSION: Final = 6
 
 DEFAULT_TICK_MS: Final = 100
 FALLBACK_TICK_MS: Final = 1000
