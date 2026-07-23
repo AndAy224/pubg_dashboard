@@ -61,7 +61,13 @@ function TrackedNav() {
     <>
       <div className="nav-sep" />
       {data.map((p) => (
-        <NavLink key={p.accountId} to={`/players/${p.accountId}`} className="navlink player">
+        <NavLink
+          key={p.accountId}
+          to={`/players/${p.accountId}`}
+          className="navlink player"
+          /* Below 900px the label is hidden and this is all that names it. */
+          title={`${p.name} · ${num(p.matches)} matches`}
+        >
           <span className="dot-lg" style={{ background: playerColour(p.accountId) }} />
           <span className="nav-name">{p.name}</span>
           <span className="faint nav-sub">{num(p.matches)}</span>
@@ -86,7 +92,7 @@ export function AppShell() {
           PUBG<span className="faint"> dash</span>
         </div>
         {NAV.map((n) => (
-          <NavLink key={n.to} to={n.to} end={n.end} className="navlink">
+          <NavLink key={n.to} to={n.to} end={n.end} className="navlink" title={n.label}>
             <span className="nav-icon">{n.icon}</span>
             <span className="nav-name">{n.label}</span>
           </NavLink>
@@ -95,7 +101,7 @@ export function AppShell() {
         <TrackedNav />
 
         <div className="spacer" />
-        <NavLink to="/settings" className="navlink">
+        <NavLink to="/settings" className="navlink" title="Settings">
           <span className="nav-icon">⚙</span>
           <span className="nav-name">Settings</span>
         </NavLink>

@@ -72,7 +72,7 @@ export function KillMap({
         <span className="faint small">{shown.length} kills</span>
       </div>
 
-      <div className="mapwrap" style={{ width: size, height: size }}>
+      <div className="mapwrap" style={{ maxWidth: size }}>
         <MapTiles info={info} size={size} zoom={1} />
         <svg className="killmap-svg" width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
           {/* Tracer from killer to victim, drawn only for the hovered kill so

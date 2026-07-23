@@ -22,7 +22,9 @@ export function MapTiles({ info, size, zoom }: { info: TileInfo; size: number; z
           height={size / n}
           loading="lazy"
           alt=""
-          style={{ display: 'block' }}
+          /* Fills its 1fr grid cell so the pyramid scales with the wrapper
+             rather than pinning it to `size` pixels. */
+          style={{ display: 'block', width: '100%', height: '100%' }}
         />,
       )
     }
@@ -32,8 +34,6 @@ export function MapTiles({ info, size, zoom }: { info: TileInfo; size: number; z
       style={{
         position: 'absolute',
         inset: 0,
-        width: size,
-        height: size,
         display: 'grid',
         gridTemplateColumns: `repeat(${n}, 1fr)`,
       }}

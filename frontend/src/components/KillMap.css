@@ -1,4 +1,7 @@
-.killmap-svg { position: absolute; inset: 0; z-index: 2; }
+/* 100%, not the `size` attribute: the viewBox maps kill coordinates into the
+   rendered box, so the whole overlay scales with the wrapper on a narrow
+   screen without any of the geometry needing to know. */
+.killmap-svg { position: absolute; inset: 0; z-index: 2; width: 100%; height: 100%; }
 
 .kill-dot {
   fill: #f85149; fill-opacity: .55;

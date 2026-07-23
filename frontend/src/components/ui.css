@@ -20,7 +20,10 @@
 .place-win.place-md .place-of { color: #1a1205; }
 
 /* --- Form strip ----------------------------------------------------------- */
-.form-strip { display: flex; gap: 3px; }
+/* Wraps, because a non-wrapping flex row's min-content is the whole strip:
+   fifteen 20px cells made the player card 346px wide and no narrower, which
+   spilled past the pane on any screen under ~800px. */
+.form-strip { display: flex; gap: 3px; flex-wrap: wrap; }
 .form-cell {
   width: 20px; height: 20px; border-radius: 3px;
   display: flex; align-items: center; justify-content: center;

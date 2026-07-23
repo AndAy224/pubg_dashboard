@@ -110,37 +110,39 @@ export function Compare() {
         <section className="split">
           <div className="card">
             <h3 style={{ marginBottom: 10 }}>Head to head</h3>
-            <table>
-              <thead>
-                <tr>
-                  <th>Stat</th>
-                  {stats.map((s) => (
-                    <th key={s.accountId} className="r">
-                      <Link to={`/players/${s.accountId}`} style={{ color: playerColourHex(s.accountId) }}>
-                        {s.name}
-                      </Link>
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                <CompareRow label="Matches" stats={stats} pick={(s) => num(s.matches)} />
-                <CompareRow label="K/D (human)" stats={stats} pick={(s) => s.kdHuman.toFixed(2)} best={(s) => s.kdHuman} />
-                <CompareRow label="K/D (with bots)" stats={stats} pick={(s) => s.kd.toFixed(2)} best={(s) => s.kd} />
-                <CompareRow label="Human kills" stats={stats} pick={(s) => num(s.killsHuman)} best={(s) => s.killsHuman} />
-                <CompareRow label="Wins" stats={stats} pick={(s) => `${s.wins} (${(s.winRate * 100).toFixed(0)}%)`} best={(s) => s.winRate} />
-                <CompareRow label="Top 10" stats={stats} pick={(s) => num(s.top10)} best={(s) => s.top10} />
-                <CompareRow label="Avg placement" stats={stats} pick={(s) => `#${s.avgPlace.toFixed(1)}`} best={(s) => -s.avgPlace} />
-                <CompareRow label="Best placement" stats={stats} pick={(s) => `#${s.bestPlace}`} best={(s) => -s.bestPlace} />
-                <CompareRow label="Avg damage" stats={stats} pick={(s) => num(s.avgDamage)} best={(s) => s.avgDamage} />
-                <CompareRow label="Headshot rate" stats={stats} pick={(s) => `${(s.headshotRate * 100).toFixed(0)}%`} best={(s) => s.headshotRate} />
-                <CompareRow label="Knocks" stats={stats} pick={(s) => num(s.knocksHuman)} best={(s) => s.knocksHuman} />
-                <CompareRow label="Longest kill" stats={stats} pick={(s) => `${num(s.longestKillM)} m`} best={(s) => s.longestKillM} />
-                <CompareRow label="Avg survived" stats={stats} pick={(s) => duration(s.avgSurvivedS)} best={(s) => s.avgSurvivedS} />
-                <CompareRow label="Revives" stats={stats} pick={(s) => num(s.revives)} best={(s) => s.revives} />
-                <CompareRow label="Distance walked" stats={stats} pick={(s) => `${num(s.walkDistanceM / 1000, 1)} km`} />
-              </tbody>
-            </table>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Stat</th>
+                    {stats.map((s) => (
+                      <th key={s.accountId} className="r">
+                        <Link to={`/players/${s.accountId}`} style={{ color: playerColourHex(s.accountId) }}>
+                          {s.name}
+                        </Link>
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  <CompareRow label="Matches" stats={stats} pick={(s) => num(s.matches)} />
+                  <CompareRow label="K/D (human)" stats={stats} pick={(s) => s.kdHuman.toFixed(2)} best={(s) => s.kdHuman} />
+                  <CompareRow label="K/D (with bots)" stats={stats} pick={(s) => s.kd.toFixed(2)} best={(s) => s.kd} />
+                  <CompareRow label="Human kills" stats={stats} pick={(s) => num(s.killsHuman)} best={(s) => s.killsHuman} />
+                  <CompareRow label="Wins" stats={stats} pick={(s) => `${s.wins} (${(s.winRate * 100).toFixed(0)}%)`} best={(s) => s.winRate} />
+                  <CompareRow label="Top 10" stats={stats} pick={(s) => num(s.top10)} best={(s) => s.top10} />
+                  <CompareRow label="Avg placement" stats={stats} pick={(s) => `#${s.avgPlace.toFixed(1)}`} best={(s) => -s.avgPlace} />
+                  <CompareRow label="Best placement" stats={stats} pick={(s) => `#${s.bestPlace}`} best={(s) => -s.bestPlace} />
+                  <CompareRow label="Avg damage" stats={stats} pick={(s) => num(s.avgDamage)} best={(s) => s.avgDamage} />
+                  <CompareRow label="Headshot rate" stats={stats} pick={(s) => `${(s.headshotRate * 100).toFixed(0)}%`} best={(s) => s.headshotRate} />
+                  <CompareRow label="Knocks" stats={stats} pick={(s) => num(s.knocksHuman)} best={(s) => s.knocksHuman} />
+                  <CompareRow label="Longest kill" stats={stats} pick={(s) => `${num(s.longestKillM)} m`} best={(s) => s.longestKillM} />
+                  <CompareRow label="Avg survived" stats={stats} pick={(s) => duration(s.avgSurvivedS)} best={(s) => s.avgSurvivedS} />
+                  <CompareRow label="Revives" stats={stats} pick={(s) => num(s.revives)} best={(s) => s.revives} />
+                  <CompareRow label="Distance walked" stats={stats} pick={(s) => `${num(s.walkDistanceM / 1000, 1)} km`} />
+                </tbody>
+              </table>
+            </div>
           </div>
 
           <div className="card">

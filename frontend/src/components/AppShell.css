@@ -37,6 +37,34 @@
   font-size: 12px; padding: 7px 10px; margin-top: 6px;
   border-top: 1px solid var(--border); color: var(--text-dim);
 }
+
+/**
+ * Below the split point the nav becomes an icon rail.
+ *
+ * At 380px a 232px nav left 148px of content pane — 61% of the screen spent
+ * on navigation, with a 917px page scrolling inside a strip narrower than a
+ * phone. The document itself never overflowed (`.content` has `overflow:
+ * auto`, which also makes its flex `min-width: auto` resolve to 0), so this
+ * was not a stray wide element to hunt down; the shell was simply spending
+ * its width in the wrong place.
+ *
+ * An icon rail rather than a drawer: navigation stays visible and reachable
+ * with no toggle state to get stuck, and the tracked players keep their
+ * identity colour, which already means the same thing on every match row.
+ * Labels move to `title`, set in AppShell.tsx.
+ */
+@media (max-width: 900px) {
+  .shell { --shell-nav: 56px; }
+  .nav { padding: 12px 6px; }
+  .navlink { justify-content: center; padding: 9px 0; gap: 0; }
+  .nav-name, .nav-sub, .nav-hint, .brand .faint { display: none; }
+  .brand { font-size: 13px; padding: 4px 0 12px; text-align: center; }
+  .nav-icon { font-size: 15px; }
+  .nav-sep { margin: 10px 4px 8px; }
+  .badge { justify-content: center; padding: 7px 0; }
+  .badge > :not(.dot) { display: none; }
+  .content { padding: 16px 14px 48px; }
+}
 .dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 8px; }
 .dot.ok { background: var(--good); }
 .dot.warn { background: var(--accent); }

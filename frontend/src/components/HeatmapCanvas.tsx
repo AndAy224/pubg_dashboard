@@ -77,14 +77,19 @@ export function decodeCells(b64: string): Uint32Array {
   return new Uint32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4)
 }
 
+/**
+ * The heat layer, filling whatever box `.mapwrap` gives it.
+ *
+ * There is deliberately no `size`: the backing store is the heatmap's own
+ * grid resolution and CSS scales it to the wrapper, so the canvas stays
+ * correct at any rendered width instead of being pinned to a pixel count.
+ */
 export function HeatmapCanvas({
   heatmap,
-  size = 512,
   blurRadius = 2,
   opacity = 0.82,
 }: {
   heatmap: Heatmap
-  size?: number
   blurRadius?: number
   opacity?: number
 }) {
@@ -130,8 +135,8 @@ export function HeatmapCanvas({
       style={{
         position: 'absolute',
         inset: 0,
-        width: size,
-        height: size,
+        width: '100%',
+        height: '100%',
         opacity,
         // The grid is row-major with y growing downward, exactly like the
         // canvas — so it is drawn as-is. No flip.

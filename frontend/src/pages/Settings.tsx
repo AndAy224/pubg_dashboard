@@ -93,40 +93,42 @@ export function Settings() {
             a backfill costs one rate-limit token; the matches it finds are free
           </span>
         </div>
-        <table>
-          <thead>
-            <tr>
-              <th>Name</th><th>Shard</th><th className="r">Matches</th>
-              <th className="r">Last polled</th><th className="r">Failures</th><th />
-            </tr>
-          </thead>
-          <tbody>
-            {players.data?.map((p) => (
-              <tr key={p.accountId}>
-                <td>
-                  <span className="row" style={{ gap: 8 }}>
-                    <span className="dot-lg" style={{ background: playerColour(p.accountId) }} />
-                    <Link to={`/players/${p.accountId}`}>{p.name}</Link>
-                  </span>
-                </td>
-                <td className="dim">{p.shard}</td>
-                <td className="r num">{p.matches}</td>
-                <td className="r dim">{ago(p.lastPolledAt)}</td>
-                <td className={`r num ${p.consecutivePollFailures ? 'bad' : 'faint'}`}>
-                  {p.consecutivePollFailures}
-                </td>
-                <td className="r">
-                  <button
-                    onClick={() => backfill.mutate(p.accountId)}
-                    disabled={backfill.isPending}
-                  >
-                    backfill
-                  </button>
-                </td>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th><th>Shard</th><th className="r">Matches</th>
+                <th className="r">Last polled</th><th className="r">Failures</th><th />
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {players.data?.map((p) => (
+                <tr key={p.accountId}>
+                  <td>
+                    <span className="row" style={{ gap: 8 }}>
+                      <span className="dot-lg" style={{ background: playerColour(p.accountId) }} />
+                      <Link to={`/players/${p.accountId}`}>{p.name}</Link>
+                    </span>
+                  </td>
+                  <td className="dim">{p.shard}</td>
+                  <td className="r num">{p.matches}</td>
+                  <td className="r dim">{ago(p.lastPolledAt)}</td>
+                  <td className={`r num ${p.consecutivePollFailures ? 'bad' : 'faint'}`}>
+                    {p.consecutivePollFailures}
+                  </td>
+                  <td className="r">
+                    <button
+                      onClick={() => backfill.mutate(p.accountId)}
+                      disabled={backfill.isPending}
+                    >
+                      backfill
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </section>
 
       <section className="card">
@@ -157,18 +159,20 @@ export function Settings() {
 
       <section className="card">
         <h3 style={{ marginBottom: 10 }}>Job queue</h3>
-        <table>
-          <thead><tr><th>Kind</th><th>State</th><th className="r">Count</th></tr></thead>
-          <tbody>
-            {ingest.data?.queue.map((q) => (
-              <tr key={`${q.kind}-${q.state}`}>
-                <td>{q.kind}</td>
-                <td className={q.state === 'failed' ? 'bad' : 'dim'}>{q.state}</td>
-                <td className="r num">{q.count}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>Kind</th><th>State</th><th className="r">Count</th></tr></thead>
+            <tbody>
+              {ingest.data?.queue.map((q) => (
+                <tr key={`${q.kind}-${q.state}`}>
+                  <td>{q.kind}</td>
+                  <td className={q.state === 'failed' ? 'bad' : 'dim'}>{q.state}</td>
+                  <td className="r num">{q.count}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
         {ingest.data?.queue.length === 0 && <div className="empty">queue is empty</div>}
       </section>
 

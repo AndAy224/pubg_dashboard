@@ -175,11 +175,11 @@ function HeatPanel({
           {heat.data ? `${num(heat.data.total)} events · peak ${num(heat.data.max)}` : '…'}
         </span>
       </div>
-      <div className="mapwrap" style={{ width: size, height: size }}>
+      <div className="mapwrap" style={{ maxWidth: size }}>
         {/* Zoom 1 is 4 tiles for a ~660 px canvas; zoom 2 would fetch 16 tiles
             to render the same pixels. */}
         <MapTiles info={info} size={size} zoom={1} />
-        {heat.data && <HeatmapCanvas heatmap={heat.data} size={size} />}
+        {heat.data && <HeatmapCanvas heatmap={heat.data} />}
       </div>
     </div>
   )

@@ -276,30 +276,32 @@ export function Player() {
           <section className="split">
             <div className="card">
               <h3 style={{ marginBottom: 10 }}>Weapons</h3>
-              <table>
-                <thead>
-                  <tr>
-                    <th>Weapon</th><th className="r">Kills</th><th className="r">HS</th>
-                    <th className="r">Longest</th><th className="r">Avg</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {weapons.data?.map((w) => (
-                    <tr key={w.weapon}>
-                      <td>{weaponName(w.weapon)}</td>
-                      <td className="r num">{w.kills}</td>
-                      <td className="r num dim">
-                        {w.headshots}
-                        {w.kills > 0 && (
-                          <span className="faint"> {Math.round((w.headshots / w.kills) * 100)}%</span>
-                        )}
-                      </td>
-                      <td className="r num">{num(w.longestM)} m</td>
-                      <td className="r num dim">{num(w.avgDistanceM)} m</td>
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Weapon</th><th className="r">Kills</th><th className="r">HS</th>
+                      <th className="r">Longest</th><th className="r">Avg</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {weapons.data?.map((w) => (
+                      <tr key={w.weapon}>
+                        <td>{weaponName(w.weapon)}</td>
+                        <td className="r num">{w.kills}</td>
+                        <td className="r num dim">
+                          {w.headshots}
+                          {w.kills > 0 && (
+                            <span className="faint"> {Math.round((w.headshots / w.kills) * 100)}%</span>
+                          )}
+                        </td>
+                        <td className="r num">{num(w.longestM)} m</td>
+                        <td className="r num dim">{num(w.avgDistanceM)} m</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
               {weapons.data?.length === 0 && <div className="empty">no kills recorded</div>}
             </div>
 
@@ -309,24 +311,26 @@ export function Player() {
                 Humans only — bot ids are recycled between matches, so grouping
                 by one would invent a single arch-enemy out of dozens.
               </p>
-              <table>
-                <thead>
-                  <tr>
-                    <th>Player</th>
-                    <th className="r" title="times they killed you">Killed you</th>
-                    <th className="r" title="times you killed them">You killed</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {nemeses.data?.map((n) => (
-                    <tr key={n.accountId}>
-                      <td>{n.name}</td>
-                      <td className={`r num ${n.killedBy > n.killed ? 'bad' : 'dim'}`}>{n.killedBy}</td>
-                      <td className={`r num ${n.killed > n.killedBy ? 'good' : 'dim'}`}>{n.killed}</td>
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Player</th>
+                      <th className="r" title="times they killed you">Killed you</th>
+                      <th className="r" title="times you killed them">You killed</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {nemeses.data?.map((n) => (
+                      <tr key={n.accountId}>
+                        <td>{n.name}</td>
+                        <td className={`r num ${n.killedBy > n.killed ? 'bad' : 'dim'}`}>{n.killedBy}</td>
+                        <td className={`r num ${n.killed > n.killedBy ? 'good' : 'dim'}`}>{n.killed}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
               {nemeses.data?.length === 0 && (
                 <div className="empty">no repeat opponents yet</div>
               )}
@@ -337,62 +341,64 @@ export function Player() {
 
       <section className="card">
         <h3 style={{ marginBottom: 10 }}>Match history</h3>
-        <table>
-          <thead>
-            <tr>
-              <th>Played</th><th>Map</th><th>Mode</th>
-              <th className="r">Place</th><th className="r">Kills</th>
-              <th className="r">Knocks</th><th className="r">Damage</th>
-              <th className="r">Survived</th><th>Killed by</th><th />
-            </tr>
-          </thead>
-          <tbody>
-            {matches.data?.map((m) => (
-              <tr key={m.matchId}>
-                <td>
-                  <Link to={`/matches/${m.matchId}`}>{dateTime(m.playedAt)}</Link>
-                </td>
-                <td>
-                  <span className="row" style={{ gap: 7 }}>
-                    <MapThumb mapName={m.mapName} size={20} />
-                    {m.mapDisplay}
-                    {m.matchType !== 'official' && (
-                      <span className="tag">{m.matchType}</span>
-                    )}
-                  </span>
-                </td>
-                <td className="dim">{gameMode(m.gameMode)}</td>
-                <td className="r"><Place place={m.winPlace} of={m.numStartTeams} size="sm" /></td>
-                <td className="r num">
-                  {m.killsHuman ?? m.kills}
-                  {m.killsHuman !== null && m.killsHuman !== m.kills && (
-                    <span className="faint"> ({m.kills})</span>
-                  )}
-                </td>
-                <td className="r num dim">{m.knocks}</td>
-                <td className="r num dim">{num(m.damageDealt)}</td>
-                <td className="r num dim">{duration(m.timeSurvived)}</td>
-                <td className="dim small">
-                  {m.deathType === 'alive' ? (
-                    <span className="good">survived</span>
-                  ) : m.killedBy ? (
-                    <>
-                      <span className={m.killedByIsBot ? 'faint' : ''}>{m.killedBy}</span>
-                      {m.deathWeapon && (
-                        <span className="faint"> · {weaponName(m.deathWeapon)}</span>
-                      )}
-                    </>
-                  ) : (
-                    <span className="faint">{m.deathType}</span>
-                  )}
-                </td>
-                <td className="r">
-                  {m.hasReplay && <Link to={`/matches/${m.matchId}/replay`}>▶</Link>}
-                </td>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Played</th><th>Map</th><th>Mode</th>
+                <th className="r">Place</th><th className="r">Kills</th>
+                <th className="r">Knocks</th><th className="r">Damage</th>
+                <th className="r">Survived</th><th>Killed by</th><th />
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {matches.data?.map((m) => (
+                <tr key={m.matchId}>
+                  <td>
+                    <Link to={`/matches/${m.matchId}`}>{dateTime(m.playedAt)}</Link>
+                  </td>
+                  <td>
+                    <span className="row" style={{ gap: 7 }}>
+                      <MapThumb mapName={m.mapName} size={20} />
+                      {m.mapDisplay}
+                      {m.matchType !== 'official' && (
+                        <span className="tag">{m.matchType}</span>
+                      )}
+                    </span>
+                  </td>
+                  <td className="dim">{gameMode(m.gameMode)}</td>
+                  <td className="r"><Place place={m.winPlace} of={m.numStartTeams} size="sm" /></td>
+                  <td className="r num">
+                    {m.killsHuman ?? m.kills}
+                    {m.killsHuman !== null && m.killsHuman !== m.kills && (
+                      <span className="faint"> ({m.kills})</span>
+                    )}
+                  </td>
+                  <td className="r num dim">{m.knocks}</td>
+                  <td className="r num dim">{num(m.damageDealt)}</td>
+                  <td className="r num dim">{duration(m.timeSurvived)}</td>
+                  <td className="dim small">
+                    {m.deathType === 'alive' ? (
+                      <span className="good">survived</span>
+                    ) : m.killedBy ? (
+                      <>
+                        <span className={m.killedByIsBot ? 'faint' : ''}>{m.killedBy}</span>
+                        {m.deathWeapon && (
+                          <span className="faint"> · {weaponName(m.deathWeapon)}</span>
+                        )}
+                      </>
+                    ) : (
+                      <span className="faint">{m.deathType}</span>
+                    )}
+                  </td>
+                  <td className="r">
+                    {m.hasReplay && <Link to={`/matches/${m.matchId}/replay`}>▶</Link>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
         {matches.isLoading && <Skeleton h={200} />}
       </section>
     </div>

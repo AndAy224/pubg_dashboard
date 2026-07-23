@@ -67,10 +67,15 @@ td.r, th.r { text-align: right; }
 .tag.win { color: #1a1205; background: var(--accent); border-color: var(--accent); font-weight: 600; }
 
 .scroll { overflow: auto; }
+
 .empty { color: var(--text-faint); padding: 24px; text-align: center; }
 
 /* --- Home ---------------------------------------------------------------- */
-.cards { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+/* `min(320px, 100%)`, not a bare 320px: a hard minimum on an `auto-fit` track
+   is a floor the grid cannot go under, so on a 324px pane the cards pushed the
+   page 53px wider than the screen. The `min()` lets the track collapse to the
+   container when there is less room than the preferred width. */
+.cards { grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); }
 .player-card {
   display: grid; gap: 12px;
   border-top: 2px solid var(--border);
@@ -158,6 +163,14 @@ td.lead { color: var(--accent); font-weight: 700; }
   border-radius: var(--radius-lg);
   overflow: hidden;
   background: var(--bg-inset);
+  /* `size` is the map's natural width, not a hard one. A fixed 640px killmap
+     in a 324px pane was the single biggest thing forcing the page wider than
+     the screen (measured: 364px of the 688px total). Every child is already
+     `position: absolute; inset: 0`, so dropping their pixel sizes lets them
+     scale with the wrapper — the SVG has a viewBox and the canvas keeps its
+     own backing-store resolution, so both stay sharp. */
+  width: 100%;
+  aspect-ratio: 1 / 1;
 }
 .row.wrap { flex-wrap: wrap; }
 code { font-family: var(--mono); background: var(--bg-inset); padding: 1px 5px; border-radius: 4px; }
@@ -224,3 +237,47 @@ code { font-family: var(--mono); background: var(--bg-inset); padding: 1px 5px; 
 .chart-card { min-height: 220px; }
 .charts { display: grid; grid-template-columns: 1.5fr 1fr; gap: 14px; }
 @media (max-width: 1000px) { .charts { grid-template-columns: 1fr; } }
+
+/* --- Narrow screens ------------------------------------------------------
+   Deliberately last in the file: several of these override earlier rules of
+   equal specificity (`.tiles`, `.cards`), and source order is what decides
+   that. Moving this block up silently disables half of it. */
+/**
+ * A table that may be wider than the screen it is on.
+ *
+ * A table's min-content width is the sum of its columns, and a `.card` has no
+ * overflow of its own, so a seven-column table made every sibling section on
+ * the page as wide as itself — the settings, compare and player pages were
+ * 569px, 398px and 905px inside a 324px pane.
+ *
+ * The scroll only exists below the split point. Above it these tables fit,
+ * and a scroll container here would silently break their sticky headers:
+ * `position: sticky` resolves against the nearest scrolling ancestor, which
+ * would become this wrapper instead of the page.
+ */
+@media (max-width: 900px) {
+  /* The wrapper alone is not enough. A grid item's `min-width` defaults to
+     `auto`, meaning its min-content — so one wide table set the width of the
+     single auto column, and every sibling section on the page stretched to
+     match it. The items have to be allowed to shrink before anything inside
+     them gets the chance to scroll. */
+  .grid > *, .split > *, .charts > *, .cards > *, .player-card > * { min-width: 0; }
+  /* Two up, not four. `1fr` carries an implicit `auto` minimum, so four stat
+     tiles could not shrink below their own min-content and spilled out of the
+     card; `minmax(0, ...)` removes that floor as well. */
+  .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .tiles.wide { grid-template-columns: repeat(auto-fit, minmax(min(140px, 100%), 1fr)); }
+  .table-wrap { overflow-x: auto; }
+  /* Both of these are `table-layout: fixed`, which meets a shortfall by
+     shrinking the one unspecified column — so on a phone the scoreboard
+     rendered its stat columns in full and gave the player names zero width.
+     A floor makes them overflow instead, and their card is already
+     `overflow: auto`, so it scrolls without becoming the sticky header's
+     containing block the way an inner wrapper would. */
+  .scoreboard { min-width: 500px; }
+  .killfeed { min-width: 430px; }
+  /* A segmented control must not break apart mid-way, so it scrolls as a
+     unit. On the `.seg` itself rather than only its bar, because the
+     heatmaps page puts one straight into the page grid. */
+  .filters, .seg { overflow-x: auto; }
+}
