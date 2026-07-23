@@ -276,6 +276,16 @@ passed on a decoder that could not read a single bundle in the archive,
 because none of them execute it — that is what `npm test` is now for, and why
 the decoder has a corpus test as well as a synthetic one.
 
+**Point a real browser at it before theorising.** Three frontend bugs in a
+row were invisible to `tsc`, `oxlint`, `vitest` and the server logs — the last
+was a plain `TypeError` during render that React Router's error boundary
+swallowed, taking the whole page with it, and it took ten seconds to find once
+a browser was actually loading the page. `frontend/scripts/probe-replay.mjs`
+prints page errors, failed requests and a DOM summary, and writes a
+screenshot. HANDOFF §17 has the no-root setup for a headless Chrome.
+
+**There is no frontend test runner**
+
 ## Error messages must not name a cause they have not checked
 
 The replay page reported "no replay bundle for this match — it has not been

@@ -124,3 +124,51 @@ describe('fit', () => {
     expect(seen).toEqual([])
   })
 })
+
+describe('camera clamping', () => {
+  /**
+   * Following a player near the coast used to drag the island into a corner
+   * and fill most of the canvas with empty background. The camera was doing
+   * exactly what it was told; the result was unreadable.
+   */
+  it('keeps the map centred when it is smaller than the viewport', () => {
+    const world = fakeWorld()
+    const vp = new Viewport(fakeCanvas(1400, 900), world as never, WORLD_PX)
+    // At fit scale the world spans 900px, narrower than the 1400px canvas.
+    vp.centreOn(0, 0)
+    expect(world.position.x).toBeCloseTo((1400 - 900) / 2, 6)
+    expect(world.position.y).toBeCloseTo(0, 6)
+  })
+
+  it('pins the edges once the map is larger than the viewport', () => {
+    const world = fakeWorld()
+    const canvas = fakeCanvas(1000, 1000)
+    const vp = new Viewport(canvas, world as never, WORLD_PX)
+    // Zoom well past fit so the world is bigger than the canvas in both axes.
+    vp.scale = 0.5
+    world.scale.set(0.5)
+    const span = WORLD_PX * 0.5
+
+    vp.centreOn(0, 0) // top-left corner: would put the world at +500,+500
+    expect(world.position.x).toBe(0)
+    expect(world.position.y).toBe(0)
+
+    vp.centreOn(WORLD_PX, WORLD_PX) // bottom-right corner
+    expect(world.position.x).toBeCloseTo(1000 - span, 6)
+    expect(world.position.y).toBeCloseTo(1000 - span, 6)
+  })
+
+  it('never leaves empty space along an axis the map covers', () => {
+    const world = fakeWorld()
+    const vp = new Viewport(fakeCanvas(1000, 1000), world as never, WORLD_PX)
+    vp.scale = 0.5
+    world.scale.set(0.5)
+    for (const [x, y] of [[0, 0], [WORLD_PX, 0], [0, WORLD_PX], [4000, 4000]]) {
+      vp.centreOn(x!, y!)
+      expect(world.position.x).toBeLessThanOrEqual(0)
+      expect(world.position.y).toBeLessThanOrEqual(0)
+      expect(world.position.x).toBeGreaterThanOrEqual(1000 - WORLD_PX * 0.5)
+      expect(world.position.y).toBeGreaterThanOrEqual(1000 - WORLD_PX * 0.5)
+    }
+  })
+})

@@ -1,7 +1,9 @@
 import { useMemo } from 'react'
 import type { ReplayBundle } from '../lib/replayBundle'
 import { dictName } from '../lib/replayBundle'
-import { weaponName } from '../lib/format'
+// `itemName` supersedes `weaponName` here: these slots hold armour and packs
+// as well as guns, and `weaponName` renders `Item_Head_F_01_Lv2_C` verbatim.
+import { itemName } from '../lib/format'
 
 /** Opcodes, mirroring `telemetry/inventory.py`. */
 const OP_ADD_LOOSE = 0
@@ -152,10 +154,10 @@ export function InventoryPanel({
             return (
               <div className="inv-slot" key={slot}>
                 <span className="inv-slot-name faint">{name}</span>
-                <span className="inv-item">{weaponName(entry.item)}</span>
+                <span className="inv-item">{itemName(entry.item)}</span>
                 {entry.attachments.length > 0 && (
                   <span className="inv-attach faint">
-                    {entry.attachments.map((a) => weaponName(a)).join(' · ')}
+                    {entry.attachments.map((a) => itemName(a)).join(' · ')}
                   </span>
                 )}
               </div>
@@ -167,7 +169,7 @@ export function InventoryPanel({
               <span className="inv-slot-name faint">Heals</span>
               {heals.map(([k, v]) => (
                 <span className="inv-pill" key={k}>
-                  {weaponName(k)} <b className="num">{v}</b>
+                  {itemName(k)} <b className="num">{v}</b>
                 </span>
               ))}
             </div>
@@ -177,7 +179,7 @@ export function InventoryPanel({
               <span className="inv-slot-name faint">Ammo</span>
               {ammo.map(([k, v]) => (
                 <span className="inv-pill" key={k}>
-                  {weaponName(k)} <b className="num">{v}</b>
+                  {itemName(k)} <b className="num">{v}</b>
                 </span>
               ))}
             </div>

@@ -698,3 +698,82 @@ with the followed player's name and a close button. The rail holds two panels:
 the kill feed (capped at 44% of the height) and the team list (takes the
 rest). Both scroll independently and neither can displace the other, so the
 team list never moves.
+
+---
+
+## 17. The replay page threw on every cold load — fixed 2026-07-23
+
+After §16 the canvas was still black. The actual cause was a **crash**, not a
+rendering problem:
+
+```
+TypeError: Cannot read properties of undefined (reading 'toUpperCase')
+```
+
+`gameMode('')` — `''.split('-')` is `['']`, so `p[0]` is `undefined` and
+`p[0]!.toUpperCase()` threw. The `!` silenced TypeScript at exactly the point
+where the value really is undefined. The call site is the replay's TopBar:
+`gameMode(match?.gameMode ?? '')`, which passes `''` for as long as the match
+query is in flight. The throw happened during render, so React Router's error
+boundary swallowed the **whole page** — canvas included.
+
+That is why it presented differently at different times: arriving from the
+match page, react-query already had the match cached and nothing threw;
+hard-reloading the replay URL threw every time. Fixed, with tests for the
+empty, null and malformed cases.
+
+### Two more things fixed once the page could render
+
+* **Camera clamping.** Following a player near the coast dragged the island
+  into a corner and filled most of the canvas with background. `Viewport`
+  now keeps the map covering the viewport, centring on an axis where the world
+  is smaller than the canvas.
+* **`itemName`.** The loadout showed `Item Attach Weapon Muzzle AR
+  MuzzleBrake` and `Item Head F 01 Lv2`. `weaponName` only strips weapon
+  decoration. `itemName` handles attachments, armour (reduced to its tier —
+  the model letter and number mean nothing, and the slot label already names
+  the piece), heals and ammo, and still falls back to the raw id.
+
+## Getting a browser onto this box, with no root
+
+Three frontend bugs in a row were invisible to `tsc`, `oxlint`, `vitest` and
+the server logs, and each cost a round trip to diagnose by reasoning. The last
+took ten seconds once a browser was actually pointed at the page. **Do this
+first next time.** `frontend/scripts/probe-replay.mjs` is the harness; it is
+not in `npm test` because it needs a browser and a running API.
+
+The box has no browser and `sudo` needs a password nobody has. It is still
+entirely doable:
+
+```bash
+S=/tmp/probe && mkdir -p $S && cd $S
+# 1. Chrome for Testing. `npm i puppeteer` fails here: its extractor needs
+#    `unzip`, which is not installed. Fetch and unpack it directly instead.
+curl -sSL -o chs.zip https://storage.googleapis.com/chrome-for-testing-public/150.0.7871.24/linux64/chrome-headless-shell-linux64.zip
+python3 -c "import zipfile;zipfile.ZipFile('chs.zip').extractall('chrome')"
+chmod -R +x chrome/            # zipfile drops the executable bit
+
+# 2. Its shared libraries. `apt-get download` needs no root, and `dpkg-deb -x`
+#    unpacks anywhere.
+mkdir -p debs libs && cd debs
+apt-get download libasound2t64 libatk1.0-0t64 libatk-bridge2.0-0t64 \
+  libatspi2.0-0t64 libgbm1 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
+  libxkbcommon0 libpango-1.0-0 libcairo2 libnss3 libnspr4 libcups2t64 libdrm2 \
+  libxshmfence1 libxrender1 libxext6 libxi6 libxtst6 libexpat1 libfontconfig1 \
+  libfreetype6 libpangocairo-1.0-0 libpangoft2-1.0-0 libharfbuzz0b libfribidi0 \
+  libthai0 libdatrie1 libgraphite2-3 libpixman-1-0 libxcb-render0 libxcb-shm0 \
+  libxres1 fonts-dejavu-core
+for d in *.deb; do dpkg-deb -x "$d" ../libs; done
+cp -r ../libs/usr/share/fonts/truetype/dejavu/* ~/.local/share/fonts/   # or no text renders
+
+# 3. Run it.
+export LD_LIBRARY_PATH=$(find $S/libs -name '*.so*' -printf '%h\n' | sort -u | tr '\n' ':')
+export CHROME=$S/chrome/chrome-headless-shell-linux64/chrome-headless-shell
+cd <repo>/frontend && PUPPETEER_SKIP_DOWNLOAD=1 npm i puppeteer   # binary already present
+node scripts/probe-replay.mjs <matchId> --t=600 --shot=/tmp/replay.png
+```
+
+`--enable-unsafe-swiftshader --use-gl=angle --use-angle=swiftshader` gives
+real WebGL with no GPU. WebGPU is unavailable and logs "No available
+adapters"; Pixi falls back to WebGL on its own, so that warning is expected
+and harmless.

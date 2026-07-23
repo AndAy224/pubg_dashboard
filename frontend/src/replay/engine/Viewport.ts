@@ -89,6 +89,31 @@ export class Viewport {
     const w = this.canvas.clientWidth || this.canvas.width
     const h = this.canvas.clientHeight || this.canvas.height
     this.world.position.set(w / 2 - x * this.scale, h / 2 - y * this.scale)
+    this.clamp()
+  }
+
+  /**
+   * Keep the map covering the viewport.
+   *
+   * Without this, following a player near the coast drags the island into a
+   * corner and fills most of the canvas with empty background — the camera is
+   * doing exactly what it was told and the result is unreadable. On an axis
+   * where the world is smaller than the viewport it is centred instead, since
+   * there is no edge to pin to.
+   */
+  private clamp(): void {
+    const w = this.canvas.clientWidth || this.canvas.width
+    const h = this.canvas.clientHeight || this.canvas.height
+    const span = this.worldPx * this.scale
+
+    this.world.position.set(
+      span <= w
+        ? (w - span) / 2
+        : Math.max(w - span, Math.min(0, this.world.position.x)),
+      span <= h
+        ? (h - span) / 2
+        : Math.max(h - span, Math.min(0, this.world.position.y)),
+    )
   }
 
   private down = (e: PointerEvent) => {
@@ -106,6 +131,7 @@ export class Viewport {
     this.world.position.y += e.clientY - this.lastY
     this.lastX = e.clientX
     this.lastY = e.clientY
+    this.clamp()
   }
 
   private up = () => {
@@ -131,6 +157,7 @@ export class Viewport {
     this.scale = next
     this.world.scale.set(next)
     this.world.position.set(px - worldX * next, py - worldY * next)
+    this.clamp()
     this.onZoomChange?.(next)
   }
 }

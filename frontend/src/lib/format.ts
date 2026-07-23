@@ -37,11 +37,29 @@ export function dateTime(iso: string): string {
   })
 }
 
-/** `squad-fpp` -> `Squad FPP`. */
-export function gameMode(mode: string): string {
+/**
+ * `squad-fpp` -> `Squad FPP`.
+ *
+ * **Must tolerate an empty or absent mode.** This used to be `p[0]!` over the
+ * raw split, and `''.split('-')` is `['']` — so `p[0]` was `undefined` and
+ * `.toUpperCase()` threw. The `!` silenced TypeScript at exactly the point
+ * where the value really is undefined.
+ *
+ * The call site was `gameMode(match?.gameMode ?? '')` in the replay's TopBar,
+ * which passes `''` for as long as the match query is in flight. The throw
+ * happened during render, so React Router's error boundary swallowed the whole
+ * **page** — canvas included — and a cold load of any replay showed nothing at
+ * all. Every PUBG enum is open, so a formatter must never assume its input's
+ * shape.
+ */
+export function gameMode(mode: string | null | undefined): string {
+  if (!mode) return '—'
   return mode
     .split('-')
-    .map((p) => (p === 'fpp' || p === 'tpp' ? p.toUpperCase() : p[0]!.toUpperCase() + p.slice(1)))
+    .filter(Boolean)
+    .map((p) =>
+      p === 'fpp' || p === 'tpp' ? p.toUpperCase() : p[0]!.toUpperCase() + p.slice(1),
+    )
     .join(' ')
 }
 
@@ -64,4 +82,43 @@ export function weaponName(raw: string | null | undefined): string {
 
 export function placement(place: number): string {
   return `#${place}`
+}
+
+/** Attachment category prefixes that only repeat what follows them. */
+const ATTACH_CATEGORY = /^(Muzzle|Magazine|Stock|Lower|Upper|SideRail)_/
+
+/**
+ * Inventory item ids, for the replay loadout.
+ *
+ * `weaponName` only strips the weapon decorations, so armour and attachments
+ * came out as `Item Attach Weapon Muzzle AR MuzzleBrake` and
+ * `Item Head F 01 Lv2` — technically the data, practically unreadable.
+ *
+ * Armour and packs encode a model letter and number that mean nothing to a
+ * reader (`Item_Head_F_01_Lv2_C` is "a level 2 helmet"), and the slot label
+ * beside them already says which piece it is, so only the tier is kept.
+ *
+ * Always degrades to something printable: `api-assets` froze in Oct 2024 and
+ * ~11% of live ids are absent from it, so an unknown id must render as itself
+ * rather than blank the row.
+ */
+export function itemName(raw: string | null | undefined): string {
+  if (!raw) return '—'
+  let s = raw.replace(/_C$/, '').replace(/^Item_/, '')
+
+  const tier = /_Lv(\d)$/.exec(s)
+  if (tier && /^(Head|Armor|Back)_/.test(s)) return `Lv${tier[1]}`
+
+  s = s
+    .replace(/^Attach_Weapon_/, '')
+    .replace(/^Weapon_/, '')
+    .replace(/^Weap/, '')
+    .replace(/^(Ammo|Heal|Boost|Attach)_/, '')
+    .replace(ATTACH_CATEGORY, '')
+
+  return s
+    .replace(/_/g, ' ')
+    // CamelCase to words, so "MuzzleBrake" reads as "Muzzle Brake".
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .trim()
 }
