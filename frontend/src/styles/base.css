@@ -98,7 +98,16 @@ td.r, th.r { text-align: right; }
 /* --- Player -------------------------------------------------------------- */
 .tiles.wide { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
 .split { display: grid; grid-template-columns: 1.4fr 1fr; gap: 14px; }
-@media (max-width: 900px) { .split { grid-template-columns: 1fr; } }
+/* The match page splits differently from the player page. Both of its tables
+   have fixed columns now, so the scoreboard's extra width was dead space
+   (measured: 76px of slack) while the kill feed was clipping 43% of its
+   `killer -> victim` cells. Moving the slack across clears most of them. */
+.split.even { grid-template-columns: 1.15fr 1fr; }
+/* `.split.even` outranks a bare `.split`, so the stacking rule has to name it
+   too or the modifier would keep two columns on a phone. */
+@media (max-width: 900px) {
+  .split, .split.even { grid-template-columns: 1fr; }
+}
 .kv { display: grid; grid-template-columns: 1fr auto; gap: 6px 16px; margin: 0; }
 .kv dt { color: var(--text-dim); }
 .kv dd { margin: 0; text-align: right; }
@@ -126,6 +135,13 @@ td.r, th.r { text-align: right; }
 .swatch { width: 10px; height: 10px; border-radius: 2px; flex: 0 0 10px; }
 tr.tracked td { background: #1c2530; }
 tr.tracked td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
+
+/* The kill feed gets the same treatment for the same reason. Auto layout gave
+   the unbounded name column everything it asked for and squeezed the rest,
+   so `1m 21s` wrapped to two lines and `21 m` split from its unit. Every cell
+   clips instead of wrapping; a `title` carries the full text. */
+.killfeed { table-layout: fixed; }
+.killfeed td { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .hero-result { text-align: right; }
 .hs-glyph { color: var(--accent); font-size: 11px; }

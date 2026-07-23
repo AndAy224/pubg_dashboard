@@ -64,6 +64,49 @@ export function gameMode(mode: string | null | undefined): string {
 }
 
 /**
+ * Damage causers that are not guns, and do not read as anything if you only
+ * strip the class-name decoration.
+ *
+ * Roughly 5% of kills in the corpus name one of these. Tidied as a plain id
+ * they render `ProjGrenade` (152 kills), `PlayerFemale A` (a punch, 19),
+ * `Bluezonebomb EffectActor` and `Uaz B 01` — unreadable, and the longest of
+ * them is wide enough on its own to distort the kill feed's columns.
+ *
+ * The list came from the corpus, not from documentation:
+ *   select weapon, count(*) from kill_events
+ *   where weapon not like 'Weap%' group by weapon order by 2 desc;
+ *
+ * Matching is lowercased and substring-based **with a fallback**, never an
+ * exhaustive switch — every PUBG enum is open and casing changes between
+ * patches, so an unrecognised causer still has to render its tidied id.
+ */
+const CAUSERS: [needle: string, label: string][] = [
+  ['bluezonebomb', 'blue zone'],
+  ['molotov', 'molotov'],
+  ['jerrycanfire', 'fire'],
+  ['fireeffect', 'fire'],
+  ['projgrenade', 'grenade'],
+  ['projc4', 'C4'],
+  ['panzerfaust', 'Panzerfaust'],
+  // A player pawn as the causer is a melee punch. `UltAIPawn` is the bot's.
+  ['playermale', 'fists'],
+  ['playerfemale', 'fists'],
+  ['ultaipawn', 'fists'],
+]
+
+/**
+ * Vehicle chassis, i.e. a roadkill.
+ *
+ * Deliberately an open list matched by prefix: PUBG adds vehicles every few
+ * patches and only some are here. Every real weapon id begins `Weap` or
+ * `Item_Weapon_`, so no gun can collide with one of these.
+ */
+const VEHICLES = [
+  'dacia', 'uaz', 'buggy', 'coupe', 'motorbike', 'rony', 'mirado', 'scooter',
+  'van', 'minibus', 'pickup', 'boat', 'aquarail', 'snowmobile', 'motorglider',
+]
+
+/**
  * Strip PUBG's class-name decoration for display.
  * `WeapHK416_C` -> `HK416`, `Item_Weapon_AWM_C` -> `AWM`.
  *
@@ -72,12 +115,20 @@ export function gameMode(mode: string | null | undefined): string {
  * lookup miss must never blank the row.
  */
 export function weaponName(raw: string | null | undefined): string {
-  if (!raw) return '—'
+  // 261 kills have no causer at all, and 6 more carry the literal string
+  // "None" — a stringified Python null that must not reach the screen.
+  if (!raw || raw === 'None') return '—'
+  const id = raw.toLowerCase()
+  for (const [needle, label] of CAUSERS) if (id.includes(needle)) return label
+  if (VEHICLES.some((v) => id.startsWith(v) || id.startsWith(`bp_${v}`))) return 'roadkill'
   return raw
     .replace(/^Item_Weapon_/, '')
     .replace(/^Weap/, '')
     .replace(/_C$/, '')
+    // Thrown melee: `WeapMacheteProjectile_C` is a machete, not a "projectile".
+    .replace(/Projectile$/, '')
     .replace(/_/g, ' ')
+    .trim()
 }
 
 export function placement(place: number): string {

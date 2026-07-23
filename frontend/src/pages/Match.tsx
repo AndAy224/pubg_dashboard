@@ -95,7 +95,7 @@ export function Match() {
         </section>
       )}
 
-      <div className="split">
+      <div className="split even">
         <section className="card scroll" style={{ maxHeight: 720 }}>
           <div className="row" style={{ marginBottom: 10 }}>
             <h3>Scoreboard</h3>
@@ -148,7 +148,23 @@ export function Match() {
 
         <section className="card scroll" style={{ maxHeight: 720 }}>
           <h3 style={{ marginBottom: 10 }}>Kill feed ({kills.data?.length ?? 0})</h3>
-          <table>
+          {/* Fixed geometry, same reasoning as the scoreboard: auto layout gave
+              the unbounded name column everything and squeezed the rest until
+              `1m 21s` broke across two lines and `21 m` split from its unit, so
+              every row was two lines tall and no two rows lined up. Only the
+              name column flexes; it ellipsises, with the full text on hover. */}
+          <table className="killfeed">
+            {/* Measured against the corpus rather than guessed: `22m 38s`
+                needs 81px, `618 m` needs 65px, and the widest of the 68
+                distinct damage causers in the archive ("vz61Skorpion") needs
+                96px of text plus 20px of padding. Everything left over goes
+                to the names, which are the part worth reading. */}
+            <colgroup>
+              <col style={{ width: 82 }} />
+              <col />
+              <col style={{ width: 120 }} />
+              <col style={{ width: 66 }} />
+            </colgroup>
             <tbody>
               {kills.data?.map((k) => (
                 <tr key={k.seq} className={k.isTeamKill ? 'teamkill' : ''}>
@@ -164,7 +180,7 @@ export function Match() {
                       duration(k.tS)
                     )}
                   </td>
-                  <td>
+                  <td title={killSummary(k)}>
                     <span className={k.killerIsBot ? 'faint' : ''}>
                       {k.killerName ?? <span className="faint">{zoneCause(k)}</span>}
                     </span>
@@ -178,7 +194,7 @@ export function Match() {
                       <span className="faint small"> +{k.assists.join(', ')}</span>
                     )}
                   </td>
-                  <td className="dim">{weaponName(k.weapon)}</td>
+                  <td className="dim" title={k.weapon ?? undefined}>{weaponName(k.weapon)}</td>
                   <td className="r num dim">
                     {k.distanceM !== null ? `${Math.round(k.distanceM)} m` : ''}
                   </td>
@@ -256,6 +272,12 @@ function ScoreRow({ p }: { p: ParticipantRow }) {
       <td className="r num faint">{duration(p.timeSurvived)}</td>
     </tr>
   )
+}
+
+/** The whole row as text, for the title of a cell that may be ellipsised. */
+function killSummary(k: KillRow): string {
+  const assists = k.assists.length > 0 ? ` (assists: ${k.assists.join(', ')})` : ''
+  return `${k.killerName ?? zoneCause(k)} → ${k.victimName ?? '?'}${assists}`
 }
 
 /** A null killer is a zone, fall or drown death — 2.9% of kills. */

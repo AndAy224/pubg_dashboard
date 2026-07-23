@@ -81,6 +81,67 @@ describe('weaponName', () => {
     expect(weaponName(null)).toBe('—')
     expect(weaponName(undefined)).toBe('—')
     expect(weaponName('')).toBe('—')
+    // Six kills store the literal string "None" — a stringified Python null.
+    // It is absence, and must not reach the screen as a weapon called "None".
+    expect(weaponName('None')).toBe('—')
+  })
+
+  /**
+   * Every id below was copied verbatim out of the corpus, not invented:
+   *   select weapon, count(*) from kill_events
+   *   where weapon not like 'Weap%' group by weapon order by 2 desc;
+   *
+   * They are ~5% of all kills, and the plain decoration-stripping path
+   * rendered them `ProjGrenade`, `PlayerFemale A` and `Uaz B 01`.
+   */
+  it('names the damage causers that are not guns', () => {
+    expect(weaponName('ProjGrenade_C')).toBe('grenade')
+    expect(weaponName('ProjC4_C')).toBe('C4')
+    expect(weaponName('PanzerFaust100M_Projectile_C')).toBe('Panzerfaust')
+    expect(weaponName('Bluezonebomb_EffectActor_C')).toBe('blue zone')
+    expect(weaponName('BP_MolotovFireDebuff_C')).toBe('molotov')
+    expect(weaponName('ProjMolotov_C')).toBe('molotov')
+    expect(weaponName('BP_FireEffectController_C')).toBe('fire')
+    expect(weaponName('JerrycanFire')).toBe('fire')
+  })
+
+  it('reads a player pawn as a punch, not as a weapon', () => {
+    // The causer of a melee kill is the attacker's own pawn — and the bot
+    // pawn is a different class again.
+    expect(weaponName('PlayerMale_A_C')).toBe('fists')
+    expect(weaponName('PlayerFemale_A_C')).toBe('fists')
+    expect(weaponName('UltAIPawn_Base_Male_C')).toBe('fists')
+    expect(weaponName('UltAIPawn_Base_Female_C')).toBe('fists')
+  })
+
+  it('reads a vehicle as a roadkill', () => {
+    expect(weaponName('Uaz_B_01_C')).toBe('roadkill')
+    expect(weaponName('Uaz_B_01_esports_C')).toBe('roadkill')
+    expect(weaponName('Dacia_A_03_v2_Esports_C')).toBe('roadkill')
+    expect(weaponName('BP_CoupeRB_C')).toBe('roadkill')
+    expect(weaponName('Buggy_A_01_C')).toBe('roadkill')
+  })
+
+  it('does not let a vehicle prefix swallow a real weapon', () => {
+    // The vehicle list is matched by prefix and is deliberately incomplete,
+    // so the guard that keeps it safe is that every real weapon id carries
+    // the `Weap`/`Item_Weapon_` prefix. Nothing here may become "roadkill".
+    for (const id of ['WeapVector_C', 'WeapVSS_C', 'WeapUZI_C', 'WeapMini14_C',
+      'WeapBerylM762_C', 'Item_Weapon_AWM_C']) {
+      expect(weaponName(id), id).not.toBe('roadkill')
+    }
+  })
+
+  it('names a thrown melee weapon after the weapon', () => {
+    expect(weaponName('WeapMacheteProjectile_C')).toBe('Machete')
+    expect(weaponName('WeapPanProjectile_C')).toBe('Pan')
+  })
+
+  it('leaves an unrecognised causer readable rather than mislabelling it', () => {
+    // Every PUBG enum is open. A causer added next patch must fall through to
+    // the tidied id, not to a wrong guess and not to an empty cell.
+    expect(weaponName('ProjSomethingNew_C')).toBe('ProjSomethingNew')
+    expect(weaponName('Hovercraft_X_99_C')).toBe('Hovercraft X 99')
   })
 })
 
