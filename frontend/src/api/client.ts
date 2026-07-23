@@ -19,6 +19,18 @@ function qs(params?: Record<string, unknown>): string {
   const sp = new URLSearchParams()
   for (const [k, v] of Object.entries(params)) {
     if (v === undefined || v === null || v === '') continue
+    if (Array.isArray(v)) {
+      // A **repeated key** — `a=1&a=2` — which is what FastAPI reads back into
+      // a list. `String(['a','b'])` is `"a,b"`, so the default path below would
+      // send one parameter whose value happens to contain a comma, and the
+      // server would look up an account id that cannot exist and answer with a
+      // perfectly well-formed empty heatmap.
+      for (const item of v) {
+        if (item === undefined || item === null || item === '') continue
+        sp.append(k, String(item))
+      }
+      continue
+    }
     sp.set(k, String(v))
   }
   const s = sp.toString()

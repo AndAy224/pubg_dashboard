@@ -331,6 +331,60 @@ async def test_heatmap_all_players_is_a_superset_of_one(
     assert one["total"] > 0
 
 
+async def test_heatmap_sums_a_named_set_of_players_exactly(
+    client: httpx.AsyncClient,
+) -> None:
+    """Repeating `accountId` sums those players and nobody else.
+
+    This is what the "tracked players (combined)" view is, and the failure it
+    has to rule out is the quiet one: answering with the `''` everyone row,
+    which is a perfectly plausible heatmap of ~100 strangers under a label
+    claiming it is three people.
+
+    Checked cell by cell rather than on the totals — two different maps can
+    share a total — and the parser writes a row per account *and* the ''
+    aggregate for every observation, so the per-account rows are disjoint and
+    must add up exactly.
+    """
+    tracked = (await client.get("/api/players", params={"tracked": True})).json()
+    ids = [p["accountId"] for p in tracked]
+    if len(ids) < 2:
+        pytest.skip("needs at least two tracked players to be a real sum")
+
+    def grid(body: dict[str, object]) -> array:
+        cells = array("I")
+        cells.frombytes(base64.b64decode(str(body["cells"])))
+        return cells
+
+    params = {"map": "Baltic_Main", "kind": "landing", "matchType": "all"}
+    singles = [
+        grid((await client.get("/api/heatmap", params={**params, "accountId": i})).json())
+        for i in ids
+    ]
+    combined_body = (
+        await client.get("/api/heatmap", params=[*params.items(), *(("accountId", i) for i in ids)])
+    ).json()
+    combined = grid(combined_body)
+    everyone = (await client.get("/api/heatmap", params=params)).json()
+
+    assert [sum(c) for c in zip(*singles, strict=True)] == list(combined)
+    assert combined_body["total"] == sum(sum(c) for c in singles)
+    # The point of the feature: emphatically not the everyone row.
+    assert 0 < combined_body["total"] < everyone["total"]
+
+
+async def test_heatmap_ignores_a_blank_account_id(client: httpx.AsyncClient) -> None:
+    """`accountId=` is how a client spells "no filter".
+
+    Passed through to `IN ('')` it would select the everyone row — the right
+    answer by accident here, but for the wrong reason, and wrong the moment it
+    is combined with a real id.
+    """
+    everyone = (await client.get("/api/heatmap", params={"kind": "kill"})).json()
+    blank = (await client.get("/api/heatmap", params={"kind": "kill", "accountId": ""})).json()
+    assert blank["total"] == everyone["total"]
+
+
 # ---------------------------------------------------------------------------
 # ingest
 # ---------------------------------------------------------------------------

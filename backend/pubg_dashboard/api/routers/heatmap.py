@@ -36,7 +36,15 @@ async def heatmap(
     map_name: Annotated[str, Query(alias="map")] = "Baltic_Main",
     kind: Annotated[str, Query()] = "movement",
     account_id: Annotated[
-        str | None, Query(alias="accountId", description="Omit for all players.")
+        list[str] | None,
+        Query(
+            alias="accountId",
+            description=(
+                "Omit for all players. Repeat the parameter to sum a specific "
+                "set of them — `accountId=a&accountId=b` — which is how the "
+                "tracked-players-combined view is built."
+            ),
+        ),
     ] = None,
     game_mode: Annotated[
         str | None, Query(alias="gameMode", description="Omit for all modes.")
@@ -78,14 +86,27 @@ async def heatmap(
     account would be a table scan. `match_type` has three values, so "all" is
     simply the absence of a predicate.
     """
+    # Blanks dropped rather than passed through: `accountId=` is how a client
+    # spells "no filter", and letting it reach `IN ('')` would silently select
+    # the everyone row while the caller believed it had named someone.
+    accounts = [a for a in (account_id or []) if a]
+
     where = [
         HeatmapBin.map_name == map_name,
         HeatmapBin.kind == kind,
-        # '' is the aggregate row, and it is a real value rather than a NULL
-        # precisely so this comparison works.
-        HeatmapBin.account_id == (account_id or ""),
         HeatmapBin.game_mode == (game_mode or ""),
     ]
+    if accounts:
+        # Summing a named set is safe because the parser writes a row per
+        # account *and* the '' aggregate for every observation, so these rows
+        # are disjoint — no event is counted twice, and none of the accounts'
+        # own totals overlap. Never mix this with the '' row, which already
+        # contains all of them.
+        where.append(HeatmapBin.account_id.in_(accounts))
+    else:
+        # '' is the aggregate row, and it is a real value rather than a NULL
+        # precisely so this comparison works.
+        where.append(HeatmapBin.account_id == "")
     if match_type and match_type != ALL_MATCH_TYPES:
         where.append(HeatmapBin.match_type == match_type)
     if since:
