@@ -216,6 +216,15 @@ Full list: BUILD-SPEC §6 (34 of them) and HANDOFF §5. The ones that bite most:
   and is not — 99 real shots report as 120.
 - **Every PUBG enum is open**, and casing changes between patches. Dispatch on
   lowercased names; never write an exhaustive switch without a default.
+- **A typed-array view must start on a multiple of its element size.**
+  `new Uint16Array(buf.buffer, buf.byteOffset, n)` throws a `RangeError` when
+  `byteOffset` is odd, and msgpack packs the replay bundle's sections back to
+  back with no padding, so the offset is effectively match data. Every one of
+  the 65 bundles has at least one misaligned section, and which ones differ
+  per match — this broke the replay for the entire archive. `replayBundle.ts`
+  keeps the zero-copy path and falls back to a copy. Under Node, msgpack
+  yields a `Buffer`, whose `.slice()` returns a **view**, not a copy; use
+  `ArrayBuffer.prototype.slice`.
 
 ## Testing wire formats
 
@@ -224,6 +233,20 @@ A unit test whose fixture you wrote is not evidence about a wire format. The
 same invented field names as the code. **Assert against the corpus**, as
 `tests/test_telemetry_combat.py` does: those tests skip cleanly when `data/`
 is absent, so they cost a source-only checkout nothing.
+
+**There is no frontend test runner**, which is why a decoder bug could break
+every replay in the archive without anything going red. `tsc`, `oxlint` and
+`npm run build` all pass on a bundle nothing can read.
+
+## Error messages must not name a cause they have not checked
+
+The replay page reported "no replay bundle for this match — it has not been
+parsed yet" for *any* failure, including a decoder exception. All 65 matches
+were parsed, so the message was provably false, and it read as a known
+limitation rather than a defect. An error that guesses its own cause is worse
+than one that says "failed" — it sends the reader somewhere else entirely.
+Distinguish the cases you can actually tell apart (a 404/409 from the server
+versus a client-side throw) and print the real error for the rest.
 
 ## Migrations
 

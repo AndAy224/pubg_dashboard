@@ -13,6 +13,22 @@ import { decode } from '@msgpack/msgpack'
  * larger buffer, so ignoring the offset silently reads the *previous*
  * section's bytes — which decodes to plausible-looking garbage rather than
  * throwing.
+ *
+ * **And the offset is very often unusable.** A typed-array view must begin on
+ * a multiple of its element size, or the constructor throws
+ * `RangeError: start offset of Uint16Array should be a multiple of 2`.
+ * msgpack packs sections back to back with no padding, so where a section
+ * lands depends on the byte length of everything before it — which is match
+ * data. Measured across the archive: **every bundle has at least one
+ * misaligned section**, and which ones differ per match. This threw on the
+ * first `Uint16Array` for all 65 matches, and because it threw inside the
+ * react-query `queryFn`, the replay page reported "no replay bundle for this
+ * match — it has not been parsed yet". The bundles were fine; nothing could
+ * read them.
+ *
+ * So the zero-copy path is now conditional, with a copy as the fallback. The
+ * copy is once per bundle load and the largest section is ~28 KB, which is
+ * not worth padding the format to avoid.
  */
 
 export const FLAG_ALIVE = 1 << 0
@@ -107,19 +123,35 @@ export interface ReplayBundle {
   dicts: Record<string, string[]>
 }
 
+/**
+ * Copy a section into its own buffer, so a view can start at offset 0.
+ *
+ * `ArrayBuffer.prototype.slice` is used rather than `TypedArray.slice`
+ * because under Node — where msgpack yields a `Buffer` rather than a plain
+ * `Uint8Array` — `Buffer.prototype.slice` returns a *view*, not a copy, and
+ * would hand back the original misaligned buffer. `ArrayBuffer.slice` copies
+ * in every runtime.
+ */
+function realign(b: Uint8Array): ArrayBuffer {
+  return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer
+}
+
 function u8(v: unknown): Uint8Array {
   const b = v as Uint8Array
+  // Always safe: a one-byte element has no alignment requirement.
   return new Uint8Array(b.buffer, b.byteOffset, b.byteLength)
 }
 
 function u16(v: unknown): Uint16Array {
   const b = v as Uint8Array
-  // byteOffset is load-bearing — see the module docstring.
+  // byteOffset is load-bearing, and must be even — see the module docstring.
+  if (b.byteOffset % 2 !== 0) return new Uint16Array(realign(b))
   return new Uint16Array(b.buffer, b.byteOffset, b.byteLength / 2)
 }
 
 function u32(v: unknown): Uint32Array {
   const b = v as Uint8Array
+  if (b.byteOffset % 4 !== 0) return new Uint32Array(realign(b))
   return new Uint32Array(b.buffer, b.byteOffset, b.byteLength / 4)
 }
 

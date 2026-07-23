@@ -521,3 +521,49 @@ gets hot.
 `uv run pytest -q` — **783 passed, 1 skipped**. `ruff`, `tsc`, `oxlint` clean.
 `mypy` still not a gate (see CLAUDE.md). Parser is **v3**; all 65 matches
 reparsed. Migration head is **0003**.
+
+---
+
+## 14. The replay never worked in a browser — fixed 2026-07-23
+
+Reported as "there is no replay bundle for any match". The bundles were
+fine: 65/65 present in object storage, correct size, valid gzip, valid
+MessagePack, every section intact. **Nothing could read them.**
+
+`lib/replayBundle.ts` wrapped each `bin` section in place —
+`new Uint16Array(buf.buffer, buf.byteOffset, n)` — for zero-copy decoding.
+But a typed-array view **must begin on a multiple of its element size**, and
+msgpack packs sections back to back with no padding, so where a section lands
+depends on the byte length of everything before it, which is match data.
+
+Measured across the whole archive: **every one of the 65 bundles has at least
+one misaligned section**, and which ones differ per match (`pos.t` here,
+`pos.off` and `zones.t` there). The pre-fix decoder throws on **65 of 65**;
+the fixed one decodes **65 of 65**, verified by running the real
+`decodeBundle` source over every bundle and cross-checking values against a
+`DataView` oracle, which has no alignment constraint.
+
+Fix keeps the zero-copy path and falls back to a copy when the offset is
+odd — once per bundle load, largest section ~28 KB, not worth padding the
+format for. Note `ArrayBuffer.prototype.slice`, not `TypedArray.slice`: under
+Node msgpack yields a `Buffer`, whose `.slice()` returns a *view*, and that
+detail silently defeated the first attempt at the fix.
+
+### Why it survived this long
+
+* **`tsc`, `oxlint` and `npm run build` all pass.** There is no frontend test
+  runner at all, so nothing executes the decoder. This is the largest gap in
+  the project's testing story: the backend has 783 tests and the flagship
+  feature had none.
+* **The error message named a cause it had not checked.** Any failure —
+  including this exception, thrown inside the react-query `queryFn` —
+  rendered "no replay bundle for this match, it has not been parsed yet".
+  Every match *was* parsed, so the message was false, and it read as a known
+  limitation. It now distinguishes a 404/409 from the server (genuinely
+  missing) from a client-side throw (prints the real error), and separately
+  reports missing map tiles instead of rendering dots on a void.
+
+### Still open
+
+A frontend test runner. One vitest case building a msgpack payload with
+deliberately odd offsets would pin this permanently and needs no corpus.

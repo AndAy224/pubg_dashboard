@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
-import { get, getBytes } from '../api/client'
+import { ApiError, get, getBytes } from '../api/client'
 import type { MatchDetail, PlayerCard, TileInfo } from '../api/types'
 import { decodeBundle, dictName, NULL_PLAYER } from '../lib/replayBundle'
 import type { ReplayBundle } from '../lib/replayBundle'
@@ -85,14 +85,43 @@ export function Replay() {
   }, [navigate, matchId])
 
   if (bundleQuery.isError) {
+    // Distinguish "the server has no bundle" from "we could not read the one
+    // it sent". Reporting both as "not parsed yet" hid a decoder bug that
+    // broke every replay in the archive: the message named a cause that was
+    // provably false, so it read as a known limitation rather than a defect.
+    const err = bundleQuery.error
+    const missing = err instanceof ApiError && (err.status === 404 || err.status === 409)
     return (
       <div className="replay-error">
-        <p>No replay bundle for this match — it has not been parsed yet.</p>
+        {missing ? (
+          <p>No replay bundle for this match — it has not been parsed yet.</p>
+        ) : (
+          <>
+            <p>The replay bundle could not be read.</p>
+            <p className="faint small">
+              The server returned it, so this is a decoding fault, not missing
+              data: {err instanceof Error ? err.message : String(err)}
+            </p>
+          </>
+        )}
         <Link to={`/matches/${matchId}`}>back to the match</Link>
       </div>
     )
   }
-  if (!bundle || !info) return <div className="replay-error">loading replay…</div>
+  if (!bundle) return <div className="replay-error">loading replay…</div>
+  if (!info) {
+    // A bundle with no tiles for its map renders as dots on a void, which
+    // looks like a broken replay rather than a missing asset.
+    return (
+      <div className="replay-error">
+        <p>No map tiles for {bundle.mapName}.</p>
+        <p className="faint small">
+          Run <code>uv run scripts/fetch_map_assets.py</code> to build them.
+        </p>
+        <Link to={`/matches/${matchId}`}>back to the match</Link>
+      </div>
+    )
+  }
 
   return (
     <div className="replay">
