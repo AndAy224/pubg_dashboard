@@ -298,7 +298,15 @@ passed on a decoder that could not read a single bundle in the archive,
 because none of them execute it — that is what `npm test` is now for, and why
 the decoder has a corpus test as well as a synthetic one.
 
-**Point a real browser at it before theorising.** Four frontend bugs in a
+**An `<img>` is natively draggable, which silently kills a pan gesture.**
+Pressing a map tile starts an HTML5 image drag: the browser fires
+`pointercancel`, the pointer stream stops, and the user drags a ghost thumbnail
+instead of the map. `MapTiles` sets `draggable={false}` for this reason. The
+kill map hid the bug by accident — its SVG overlay covers the tiles, so the
+press never reaches an image — while the heatmaps, which have no overlay,
+panned exactly one pointer event and stopped. `scripts/probe-map.mjs` checks it.
+
+**Point a real browser at it before theorising.** Five frontend bugs in a
 row were invisible to `tsc`, `oxlint`, `vitest` and the server logs — one
 was a plain `TypeError` during render that React Router's error boundary
 swallowed, taking the whole page with it, and it took ten seconds to find once

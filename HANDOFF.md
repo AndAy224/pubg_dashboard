@@ -1067,3 +1067,61 @@ wheel, so `seatIndex` is deliberately not consulted.
 
 `pos.flags` was already a byte with three spare bits, so this cost nothing:
 bundle size is unchanged at ~113 KB.
+
+---
+
+## 23. The kill map and heatmaps are zoomable — added 2026-07-23
+
+Both grew scroll-to-zoom, drag-to-pan and +/−/reset buttons. `MapView` is the
+shared box; `lib/panZoom.ts` is the maths, and it is pure and tested because
+that is where this frontend's bugs actually live.
+
+**Everything is in viewport fractions, not pixels.** These panels are fluid —
+`.mapwrap` is `width: 100%` with a square aspect ratio, so the same map is
+660 px on a desktop and 324 px in a narrow pane, and it changes width while
+someone is looking at it. A pixel offset captured at one width is wrong at the
+next, and it reads as a map that drifts when you resize rather than as a unit
+bug. Fractions also let one transform drive two coordinate systems that never
+learn each other's units: a CSS `translate(%) scale()` on the tiles, and SVG
+user units on the marker overlay.
+
+### Two layers, and which one a thing goes in is the design
+
+The heat field is *terrain* and rides inside the transformed layer. Kill dots
+and drop labels are drawn **outside** it, in screen space, positioned from the
+transform — so they keep a constant size. You zoom into a crowded fight to
+separate the dots; markers that scale with the map arrive at the same pile,
+just bigger. The replay counter-scales its markers for the same reason.
+
+Verified numerically rather than by eye: after zooming, the overlay markers
+agree with the transform the browser actually applied to the tile layer to
+within 0.0014 of 660 SVG units, and a dot's radius is 3 at both fit and 2.4x.
+
+### The tile pyramid now climbs with the zoom
+
+`MapTiles` had a hardcoded `zoom={1}`, correct only for a static 660 px panel
+at dpr 1. Left alone, zooming would have magnified one stretched
+low-resolution tile — which is exactly the bug §18 documents in the replay, and
+it reads as a bad screenshot rather than as a defect. The level now comes from
+rendered width x zoom x device pixel ratio, measured with a `ResizeObserver`.
+
+### `<img>` is draggable, and that silently killed the pan
+
+Pressing a tile starts an HTML5 image drag: `pointercancel` fires, the pointer
+stream stops dead, and the cursor picks up a ghost thumbnail. The heatmaps
+panned **exactly one pointer event** and then froze.
+
+The kill map worked the whole time and hid it — its SVG overlay covers the
+tiles, so a press never lands on an image. Two surfaces sharing one component,
+one of them accidentally immune, is precisely the shape that survives casual
+testing. `tsc`, `oxlint` and `vitest` were all green throughout.
+
+Diagnosis worth keeping: the tell was `pointerup: 0` alongside a partial drag.
+Guessing produced four wrong theories (React remount, event coalescing, stale
+refs, capture loss); a `MutationObserver` ruled out the remount in one run, and
+counting the events the element actually received pointed straight at the
+cancel. `draggable={false}` on the tiles, `user-select: none` on the stage.
+
+`scripts/probe-map.mjs` is the harness — it asserts the wheel anchors under the
+cursor, the drag moves 1:1, the pyramid level matches, no tile is draggable and
+the page does not overflow horizontally. Run it against both surfaces.

@@ -172,6 +172,36 @@ td.lead { color: var(--accent); font-weight: 700; }
   width: 100%;
   aspect-ratio: 1 / 1;
 }
+
+/* Pan/zoom. `.mapview-stage` is the clipping box and the event target; the
+   world layer is what moves, and anything drawn on top of it is positioned in
+   screen space so it keeps a constant size. */
+/* `user-select: none` so a drag across the map does not sweep a text selection
+   over the labels baked into the tiles, which then fights the pan. */
+.mapview-stage { position: absolute; inset: 0; touch-action: none; user-select: none; }
+.mapview-stage.zoomed { cursor: grab; }
+.mapview-stage.zoomed:active { cursor: grabbing; }
+.mapview-world {
+  position: absolute; inset: 0;
+  /* Scale about the top-left so the transform composes with a pan expressed as
+     a fraction of the box. `transform-origin: center` would fold an extra
+     half-box offset into every calculation, which is exactly the sort of thing
+     that looks almost right. */
+  transform-origin: 0 0;
+  will-change: transform;
+}
+.mapview-controls {
+  position: absolute; right: 8px; bottom: 8px; z-index: 2;
+  display: flex; gap: 4px;
+}
+.mapview-controls button {
+  min-width: 26px; padding: 2px 7px; font-size: 12px; line-height: 1.5;
+  background: rgba(14, 17, 22, .82); border: 1px solid var(--border);
+  backdrop-filter: blur(4px);
+}
+.mapview-controls button:disabled { opacity: .45; cursor: default; }
+.mapview-reset { font-variant-numeric: tabular-nums; }
+
 .row.wrap { flex-wrap: wrap; }
 code { font-family: var(--mono); background: var(--bg-inset); padding: 1px 5px; border-radius: 4px; }
 
