@@ -1,3 +1,5 @@
+import { useSyncExternalStore } from 'react'
+
 /**
  * Identity colours for the tracked players.
  *
@@ -14,13 +16,50 @@ const SLOTS = ['var(--p-1)', 'var(--p-2)', 'var(--p-3)', 'var(--p-4)'] as const
 const SLOT_HEX = ['#f0b429', '#4cc9f0', '#b388ff', '#56d364'] as const
 
 let order: string[] = []
+const listeners = new Set<() => void>()
 
 /** Register the tracked roster. Idempotent; safe to call on every render. */
 export function registerPlayers(accountIds: string[]): void {
   const next = [...new Set(accountIds)].sort()
   if (next.length !== order.length || next.some((a, i) => a !== order[i])) {
     order = next
+    // Iterate a copy. A notified subscriber can detach another — React
+    // unsubscribes on unmount, and this notification is what triggers the
+    // re-render that unmounts things — and a live Set would skip whichever
+    // listener that was if it had not been reached yet.
+    // oxlint-disable-next-line no-useless-spread
+    for (const notify of [...listeners]) notify()
   }
+}
+
+/**
+ * Subscribe to the roster.
+ *
+ * `order` is module state that components read *during render* while every
+ * `registerPlayers` call happens in an *effect* — which runs afterwards. So
+ * the first render after the roster arrives read an empty `order`, got the
+ * neutral fallback, and nothing ever told React to try again. The nav's three
+ * player dots were grey permanently; every other surface got its colours only
+ * because some unrelated re-render happened to come along later.
+ *
+ * That is exactly what `useSyncExternalStore` exists for. `getSnapshot`
+ * returns the array itself, whose identity changes only when the roster
+ * really changes, so subscribing cannot loop.
+ */
+export function subscribeToPlayers(notify: () => void): () => void {
+  listeners.add(notify)
+  return () => {
+    listeners.delete(notify)
+  }
+}
+
+export function getPlayerOrder(): string[] {
+  return order
+}
+
+/** Re-render the caller whenever the tracked roster changes. */
+export function useTrackedPlayers(): string[] {
+  return useSyncExternalStore(subscribeToPlayers, getPlayerOrder, getPlayerOrder)
 }
 
 function slot(accountId: string): number {

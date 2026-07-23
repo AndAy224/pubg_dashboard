@@ -1,5 +1,13 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { isTracked, placeGrade, playerColour, playerColourHex, registerPlayers } from './players'
+import {
+  getPlayerOrder,
+  isTracked,
+  placeGrade,
+  playerColour,
+  playerColourHex,
+  registerPlayers,
+  subscribeToPlayers,
+} from './players'
 
 const ANDAY = 'account.662de5f2cecc4998886b83be6582ed12'
 const SIERIUS = 'account.a92d4e1700f54ccab0c6a0e5928cbdb7'
@@ -51,6 +59,87 @@ describe('identity colours', () => {
     for (const id of [ANDAY, SIERIUS, GAINZ]) {
       expect(hexes[slots.indexOf(playerColour(id))]).toBe(playerColourHex(id))
     }
+  })
+})
+
+/**
+ * The subscription is the whole reason the nav's player dots were grey.
+ *
+ * `order` is read during render but written from an effect, so the first
+ * render after the roster arrives always saw an empty roster and rendered the
+ * neutral fallback. Nothing told React to look again, so the nav stayed grey
+ * for the life of the page while other surfaces got their colours only when
+ * some unrelated re-render happened along.
+ *
+ * These test the store contract directly rather than through a component:
+ * there is no jsdom here, and the bug was never in the markup.
+ */
+describe('roster subscription', () => {
+  beforeEach(() => registerPlayers([]))
+
+  it('notifies subscribers when the roster arrives', () => {
+    let calls = 0
+    const stop = subscribeToPlayers(() => calls++)
+    // Precisely the sequence that was broken: read first, register second.
+    expect(playerColour(ANDAY)).toBe('var(--text-dim)')
+    registerPlayers([ANDAY, SIERIUS, GAINZ])
+    expect(calls).toBe(1)
+    expect(playerColour(ANDAY)).not.toBe('var(--text-dim)')
+    stop()
+  })
+
+  it('stays silent when the roster has not actually changed', () => {
+    // `useSyncExternalStore` re-reads on every notification, so a store that
+    // cries wolf turns one registration per page into a render storm.
+    registerPlayers([ANDAY, SIERIUS, GAINZ])
+    let calls = 0
+    const stop = subscribeToPlayers(() => calls++)
+    registerPlayers([ANDAY, SIERIUS, GAINZ])
+    registerPlayers([GAINZ, SIERIUS, ANDAY])
+    expect(calls).toBe(0)
+    stop()
+  })
+
+  it('hands out a snapshot whose identity is stable until it changes', () => {
+    // If `getSnapshot` returned a fresh array each call, React would see a new
+    // value on every render and loop forever.
+    registerPlayers([ANDAY, SIERIUS])
+    const first = getPlayerOrder()
+    expect(getPlayerOrder()).toBe(first)
+    registerPlayers([ANDAY, SIERIUS, GAINZ])
+    expect(getPlayerOrder()).not.toBe(first)
+  })
+
+  it('stops notifying after unsubscribe', () => {
+    let calls = 0
+    subscribeToPlayers(() => calls++)()
+    registerPlayers([ANDAY])
+    expect(calls).toBe(0)
+  })
+
+  it('notifies every subscriber even if one detaches another mid-notification', () => {
+    // React unsubscribes on unmount, and it is this very notification that
+    // triggers the re-render doing the unmounting — so a listener really can
+    // remove a later one while the store is still iterating. Over a live Set
+    // that later listener is skipped and its component keeps the stale
+    // colours, which is the original bug wearing a different hat.
+    const seen: string[] = []
+    const stopA = subscribeToPlayers(() => {
+      seen.push('a')
+      stopC()
+    })
+    const stopB = subscribeToPlayers(() => seen.push('b'))
+    const stopC = subscribeToPlayers(() => seen.push('c'))
+
+    registerPlayers([ANDAY, SIERIUS])
+    expect(seen).toEqual(['a', 'b', 'c'])
+
+    // And it really is detached for the next round.
+    seen.length = 0
+    registerPlayers([ANDAY])
+    expect(seen).toEqual(['a', 'b'])
+    stopA()
+    stopB()
   })
 })
 

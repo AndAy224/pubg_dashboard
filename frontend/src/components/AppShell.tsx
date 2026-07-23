@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { get } from '../api/client'
 import type { Health, PlayerCard } from '../api/types'
 import { ago, num } from '../lib/format'
-import { playerColour, registerPlayers } from '../lib/players'
+import { playerColour, registerPlayers, useTrackedPlayers } from '../lib/players'
 import './AppShell.css'
 
 const NAV = [
@@ -85,6 +85,18 @@ function TrackedNav() {
 }
 
 export function AppShell() {
+  /**
+   * Subscribed here, above the `<Outlet />`, deliberately.
+   *
+   * Identity colours are read during render all over the app — the nav, the
+   * match feed's kill chips, the scoreboard swatches, the heatmap panels —
+   * but the roster is registered from an effect, so the render that first
+   * needs a colour always precedes the registration. Re-rendering the shell
+   * re-renders the routed page with it, so one subscription fixes every
+   * surface rather than each one having to remember.
+   */
+  useTrackedPlayers()
+
   return (
     <div className="shell">
       <nav className="nav">
