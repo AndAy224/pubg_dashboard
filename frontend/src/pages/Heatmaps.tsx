@@ -1,82 +1,185 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { get } from '../api/client'
 import type { Heatmap, PlayerCard, TileInfo } from '../api/types'
 import { HeatmapCanvas } from '../components/HeatmapCanvas'
 import { MapTiles } from '../components/MapTiles'
 import { num } from '../lib/format'
+import { playerColour, registerPlayers } from '../lib/players'
 
-const KINDS = ['movement', 'kill', 'death', 'knock', 'landing', 'care_package', 'vehicle_destroy']
-const SIZE = 720
+const KINDS = [
+  { key: 'landing', label: 'landings' },
+  { key: 'movement', label: 'movement' },
+  { key: 'kill', label: 'kills' },
+  { key: 'death', label: 'deaths' },
+  { key: 'knock', label: 'knocks' },
+  { key: 'care_package', label: 'care pkgs' },
+  { key: 'vehicle_destroy', label: 'vehicles' },
+]
+const MODES = ['squad-fpp', 'duo-fpp', 'solo-fpp', 'squad', 'duo', 'solo']
+const SIZE = 660
 
 export function Heatmaps() {
   const [kind, setKind] = useState('landing')
   const [mapName, setMapName] = useState('Baltic_Main')
-  const [accountId, setAccountId] = useState('')
+  const [gameMode, setGameMode] = useState('')
+  const [matchType, setMatchType] = useState('official')
+  const [split, setSplit] = useState(false)
+
+  useEffect(() => {
+    document.title = 'Heatmaps · PUBG dashboard'
+  }, [])
 
   const tiles = useQuery({
     queryKey: ['tiles'],
     queryFn: () => get<Record<string, TileInfo>>('/tiles/manifest.json'),
+    staleTime: 10 * 60_000,
   })
   const players = useQuery({
     queryKey: ['players', 'tracked'],
     queryFn: () => get<PlayerCard[]>('/players', { tracked: true }),
+    staleTime: 5 * 60_000,
   })
-  const heat = useQuery({
-    queryKey: ['heatmap', mapName, kind, accountId],
-    queryFn: () => get<Heatmap>('/heatmap', { map: mapName, kind, accountId: accountId || undefined }),
-  })
+  useEffect(() => {
+    if (players.data) registerPlayers(players.data.map((p) => p.accountId))
+  }, [players.data])
 
+  const [accountId, setAccountId] = useState('')
   const info = tiles.data?.[mapName]
 
+  // Compare mode draws one panel per tracked player with identical filters,
+  // which is the only way to answer "where do we each drop" — a single
+  // blended map cannot separate three people.
+  const panels = split
+    ? (players.data ?? []).map((p) => ({ accountId: p.accountId, label: p.name }))
+    : [{ accountId, label: accountId ? players.data?.find((p) => p.accountId === accountId)?.name ?? '' : 'everyone' }]
+
   return (
-    <div className="grid" style={{ gap: 16 }}>
+    <div className="grid" style={{ gap: 14 }}>
       <h1>Heatmaps</h1>
 
-      <div className="row wrap">
+      <div className="filters">
         <select value={mapName} onChange={(e) => setMapName(e.target.value)}>
           {Object.values(tiles.data ?? {}).map((t) => (
             <option key={t.mapName} value={t.mapName}>{t.display ?? t.mapName}</option>
           ))}
         </select>
-        <select value={accountId} onChange={(e) => setAccountId(e.target.value)}>
-          <option value="">everyone</option>
-          {players.data?.map((p) => <option key={p.accountId} value={p.accountId}>{p.name}</option>)}
+
+        {/* "all" is the API's sentinel for every type — an empty string would
+            be dropped by the query-string builder and silently fall back to
+            official while this control claimed otherwise. */}
+        <select value={matchType} onChange={(e) => setMatchType(e.target.value)}>
+          <option value="official">official only</option>
+          <option value="all">all match types</option>
+          <option value="airoyale">airoyale</option>
+          <option value="tutorialatoz">tutorial</option>
         </select>
-        <div className="row" style={{ gap: 4 }}>
-          {KINDS.map((k) => (
-            <button key={k} className={k === kind ? 'on' : ''} onClick={() => setKind(k)}>
-              {k.replace('_', ' ')}
-            </button>
+
+        <select value={gameMode} onChange={(e) => setGameMode(e.target.value)}>
+          <option value="">all modes</option>
+          {MODES.map((m) => <option key={m} value={m}>{m}</option>)}
+        </select>
+
+        {!split && (
+          <select value={accountId} onChange={(e) => setAccountId(e.target.value)}>
+            <option value="">everyone</option>
+            {players.data?.map((p) => (
+              <option key={p.accountId} value={p.accountId}>{p.name}</option>
+            ))}
+          </select>
+        )}
+
+        <button className={split ? 'on' : ''} onClick={() => setSplit((v) => !v)}>
+          ⇄ compare players
+        </button>
+      </div>
+
+      <div className="seg">
+        {KINDS.map((k) => (
+          <button key={k.key} className={k.key === kind ? 'on' : ''} onClick={() => setKind(k.key)}>
+            {k.label}
+          </button>
+        ))}
+      </div>
+
+      <p className="faint small" style={{ margin: 0 }}>
+        {matchType === 'official'
+          ? 'Official matches only — the same set career stats count.'
+          : 'All match types, including airoyale and tutorial.'}{' '}
+        Kill and death bins include bots, which career K/D excludes by default.
+      </p>
+
+      {!info ? (
+        <div className="card empty">
+          no tiles for {mapName} — run <code>scripts/fetch_map_assets.py</code>
+        </div>
+      ) : (
+        <div className="heatgrid" style={{ gridTemplateColumns: `repeat(${panels.length}, minmax(0, 1fr))` }}>
+          {panels.map((p) => (
+            <HeatPanel
+              key={p.accountId || 'all'}
+              info={info}
+              mapName={mapName}
+              kind={kind}
+              accountId={p.accountId}
+              label={p.label}
+              gameMode={gameMode}
+              matchType={matchType}
+              size={split ? Math.min(SIZE, 1180 / panels.length) : SIZE}
+            />
           ))}
         </div>
-      </div>
+      )}
+    </div>
+  )
+}
 
-      <div className="faint small">
-        {heat.data && (
-          <>
-            {num(heat.data.total)} events binned · peak cell {num(heat.data.max)} ·{' '}
-            {heat.data.grid}×{heat.data.grid} grid
-            {' · '}
-            {/* Stated plainly rather than hidden: bins have no match_type
-                dimension, so these include airoyale and tutorial matches
-                while career stats do not. */}
-            <span title="heatmap_bins has no match_type column">all match types</span>
-          </>
-        )}
-      </div>
+function HeatPanel({
+  info,
+  mapName,
+  kind,
+  accountId,
+  label,
+  gameMode,
+  matchType,
+  size,
+}: {
+  info: TileInfo
+  mapName: string
+  kind: string
+  accountId: string
+  label: string
+  gameMode: string
+  matchType: string
+  size: number
+}) {
+  const heat = useQuery({
+    queryKey: ['heatmap', mapName, kind, accountId, gameMode, matchType],
+    queryFn: () =>
+      get<Heatmap>('/heatmap', {
+        map: mapName,
+        kind,
+        accountId: accountId || undefined,
+        gameMode: gameMode || undefined,
+        matchType,
+      }),
+  })
 
-      <div className="mapwrap" style={{ width: SIZE, height: SIZE }}>
-        {info ? (
-          <>
-            <MapTiles info={info} size={SIZE} zoom={2} />
-            {heat.data && <HeatmapCanvas heatmap={heat.data} size={SIZE} />}
-          </>
-        ) : (
-          <div className="empty">
-            no tiles for {mapName} — run <code>scripts/fetch_map_assets.py</code>
-          </div>
-        )}
+  return (
+    <div className="grid" style={{ gap: 6 }}>
+      <div className="row">
+        {accountId && <span className="dot-lg" style={{ background: playerColour(accountId) }} />}
+        <strong>{label}</strong>
+        <div className="spacer" />
+        <span className="faint small">
+          {heat.data ? `${num(heat.data.total)} events · peak ${num(heat.data.max)}` : '…'}
+        </span>
+      </div>
+      <div className="mapwrap" style={{ width: size, height: size }}>
+        {/* Zoom 1 is 4 tiles for a ~660 px canvas; zoom 2 would fetch 16 tiles
+            to render the same pixels. */}
+        <MapTiles info={info} size={size} zoom={1} />
+        {heat.data && <HeatmapCanvas heatmap={heat.data} size={size} />}
       </div>
     </div>
   )

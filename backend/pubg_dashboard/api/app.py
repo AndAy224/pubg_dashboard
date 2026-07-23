@@ -8,10 +8,19 @@ from contextlib import asynccontextmanager
 import structlog
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from pubg_dashboard.api.routers import health, heatmap, ingest, matches, players, tiles
+from pubg_dashboard.api.routers import (
+    health,
+    heatmap,
+    ingest,
+    matches,
+    overview,
+    players,
+    tiles,
+)
 from pubg_dashboard.config import REPO_ROOT, get_settings
 from pubg_dashboard.db.session import dispose_engine, init_engine
 
@@ -43,6 +52,13 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    # The heatmap endpoint returns a dense 256x256 Uint32 grid as base64 —
+    # 350 KB on the wire, and mostly zeros, so it compresses ~25x. Starlette
+    # skips any response that already carries Content-Encoding, which is what
+    # keeps it from re-compressing the replay bundle (served still-gzipped
+    # straight out of object storage).
+    app.add_middleware(GZipMiddleware, minimum_size=1024)
+
     if settings.cors_origins:
         app.add_middleware(
             CORSMiddleware,
@@ -55,7 +71,7 @@ def create_app() -> FastAPI:
             expose_headers=["Content-Encoding", "X-Parser-Version"],
         )
 
-    for module in (health, players, matches, heatmap, ingest, tiles):
+    for module in (health, overview, players, matches, heatmap, ingest, tiles):
         app.include_router(module.router, prefix=API_PREFIX)
 
     _mount_frontend(app)

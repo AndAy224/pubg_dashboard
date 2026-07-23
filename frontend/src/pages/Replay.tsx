@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Link, useParams } from 'react-router'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import { get, getBytes } from '../api/client'
 import type { MatchDetail, PlayerCard, TileInfo } from '../api/types'
 import { decodeBundle, dictName, NULL_PLAYER } from '../lib/replayBundle'
@@ -8,6 +8,8 @@ import type { ReplayBundle } from '../lib/replayBundle'
 import { duration, gameMode, weaponName } from '../lib/format'
 import { hex, teamColour, BOT_COLOUR } from '../lib/palette'
 import { ReplayCanvas } from '../replay/ReplayCanvas'
+import { Timeline } from '../replay/Timeline'
+import { InventoryPanel } from '../replay/Inventory'
 import type { Renderer } from '../replay/engine/Renderer'
 import { getSnapshot, subscribe } from '../replay/store'
 import './Replay.css'
@@ -16,8 +18,11 @@ const SPEEDS = [1, 2, 4, 8, 20]
 
 export function Replay() {
   const { matchId = '' } = useParams()
+  const [params] = useSearchParams()
+  const navigate = useNavigate()
   const rendererRef = useRef<Renderer | null>(null)
   const [ready, setReady] = useState(false)
+  const [follow, setFollow] = useState<number | null>(null)
 
   const match = useQuery({
     queryKey: ['match', matchId],
@@ -37,13 +42,47 @@ export function Replay() {
     [players.data],
   )
 
-  const onReady = useCallback((r: Renderer) => {
-    rendererRef.current = r
-    setReady(true)
-  }, [])
-
   const bundle = bundleQuery.data
   const info = bundle ? tiles.data?.[bundle.mapName] : undefined
+
+  // `?t=` seconds and `?follow=` account id, so a kill-feed row on the match
+  // page can link straight into the moment it describes.
+  const seekTo = params.get('t')
+  const followParam = params.get('follow')
+
+  const onReady = useCallback(
+    (r: Renderer) => {
+      rendererRef.current = r
+      if (seekTo) {
+        const seconds = Number(seekTo)
+        // Land a couple of seconds early: arriving exactly on the kill means
+        // arriving after the fight that produced it.
+        if (Number.isFinite(seconds)) r.seek(Math.max(0, (seconds - 3) * 1000))
+      }
+      if (followParam && bundle) {
+        const idx = bundle.players.findIndex((p) => p.a === followParam)
+        if (idx >= 0) {
+          r.followPlayer(idx)
+          setFollow(idx)
+        }
+      }
+      setReady(true)
+    },
+    [seekTo, followParam, bundle],
+  )
+
+  const onFollow = useCallback((index: number | null) => {
+    setFollow(index)
+    rendererRef.current?.followPlayer(index)
+  }, [])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code === 'Escape') navigate(`/matches/${matchId}`)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [navigate, matchId])
 
   if (bundleQuery.isError) {
     return (
@@ -67,11 +106,18 @@ export function Replay() {
           onReady={onReady}
         />
         <TopBar match={match.data} bundle={bundle} />
-        {ready && <Controls renderer={rendererRef} bundle={bundle} />}
+        {ready && (
+          <Controls
+            renderer={rendererRef}
+            bundle={bundle}
+            tracked={tracked}
+          />
+        )}
       </div>
       <aside className="rail">
-        {ready && <KillFeed bundle={bundle} />}
-        <TeamList bundle={bundle} tracked={tracked} renderer={rendererRef} />
+        {ready && <KillFeed bundle={bundle} renderer={rendererRef} />}
+        {ready && <InventoryFromStore bundle={bundle} playerIndex={follow} />}
+        <TeamList bundle={bundle} tracked={tracked} follow={follow} onFollow={onFollow} />
       </aside>
     </div>
   )
@@ -99,12 +145,27 @@ function TopBar({ match, bundle }: { match?: MatchDetail; bundle: ReplayBundle }
   )
 }
 
+/** Reads the playhead from the store so the inventory does not re-render the
+ *  whole page at 10 Hz. */
+function InventoryFromStore({
+  bundle,
+  playerIndex,
+}: {
+  bundle: ReplayBundle
+  playerIndex: number | null
+}) {
+  const s = useReplayState()
+  return <InventoryPanel bundle={bundle} playerIndex={playerIndex} nowMs={s.nowMs} />
+}
+
 function Controls({
   renderer,
   bundle,
+  tracked,
 }: {
   renderer: React.RefObject<Renderer | null>
   bundle: ReplayBundle
+  tracked: Set<string>
 }) {
   const s = useReplayState()
   const [, force] = useState(0)
@@ -138,34 +199,57 @@ function Controls({
 
   return (
     <div className="controls">
-      <button onClick={toggle}>{s.playing ? '❚❚' : '▶'}</button>
-      <button onClick={() => seekBy(-10_000)} title="back 10s (←)">-10s</button>
-      <button onClick={() => seekBy(10_000)} title="forward 10s (→)">+10s</button>
-      <input
-        className="scrub"
-        type="range"
-        min={0}
-        max={bundle.durationMs}
-        step={100}
-        value={s.nowMs}
-        onChange={(e) => renderer.current?.seek(Number(e.target.value))}
+      {/* The match strip: alive-count curve, kill ticks and phase boundaries,
+          so the fights are findable instead of hidden in a flat scrubber. */}
+      <Timeline
+        bundle={bundle}
+        nowMs={s.nowMs}
+        tracked={tracked}
+        onSeek={(ms) => renderer.current?.seek(ms)}
       />
-      {SPEEDS.map((v) => (
-        <button key={v} className={s.speed === v ? 'on' : ''} onClick={() => setSpeed(v)}>
-          {v}×
-        </button>
-      ))}
-      <button onClick={() => renderer.current?.fit()} title="fit (F)">⤢</button>
+      <div className="control-row">
+        <button onClick={toggle}>{s.playing ? '❚❚' : '▶'}</button>
+        <button onClick={() => seekBy(-10_000)} title="back 10s (←)">-10s</button>
+        <button onClick={() => seekBy(10_000)} title="forward 10s (→)">+10s</button>
+        <input
+          className="scrub"
+          type="range"
+          min={0}
+          max={bundle.durationMs}
+          step={100}
+          value={s.nowMs}
+          onChange={(e) => renderer.current?.seek(Number(e.target.value))}
+        />
+        {SPEEDS.map((v) => (
+          <button key={v} className={s.speed === v ? 'on' : ''} onClick={() => setSpeed(v)}>
+            {v}×
+          </button>
+        ))}
+        <button onClick={() => renderer.current?.fit()} title="fit (F)">⤢</button>
+      </div>
     </div>
   )
 }
 
-function KillFeed({ bundle }: { bundle: ReplayBundle }) {
+/**
+ * Kills, knocks and revives interleaved.
+ *
+ * Knocks and revives were already in the bundle and never rendered — in squad
+ * modes a knock is most of the story, and a feed that only shows the finishing
+ * blow reads as if fights resolve instantly.
+ */
+function KillFeed({
+  bundle,
+  renderer,
+}: {
+  bundle: ReplayBundle
+  renderer: React.RefObject<Renderer | null>
+}) {
   const s = useReplayState()
   const tick = s.nowMs / bundle.tickMs
   const rows = bundle.events
-    .filter((e) => e.k === 'kill' && e.t <= tick)
-    .slice(-14)
+    .filter((e) => (e.k === 'kill' || e.k === 'knock' || e.k === 'revive') && e.t <= tick)
+    .slice(-18)
     .reverse()
 
   return (
@@ -175,18 +259,28 @@ function KillFeed({ bundle }: { bundle: ReplayBundle }) {
         {rows.map((e, i) => {
           const victim = bundle.players[e.v as number]
           const killer = (e.p as number) === NULL_PLAYER ? null : bundle.players[e.p as number]
+          const ms = e.t * bundle.tickMs
           return (
-            <div className="feed-row" key={`${e.t}-${i}`}>
-              <span className="faint num">{duration((e.t * bundle.tickMs) / 1000)}</span>
+            <button
+              className={`feed-row kind-${e.k}`}
+              key={`${e.t}-${i}`}
+              onClick={() => renderer.current?.seek(Math.max(0, ms - 3000))}
+              title="jump here"
+            >
+              <span className="faint num">{duration(ms / 1000)}</span>
               <span style={{ color: killer ? hex(teamColour(killer.t)) : undefined }}>
                 {killer?.n ?? 'zone'}
               </span>
-              <span className="faint">{weaponName(dictName(bundle.dicts, 'weapons', e.w as number))}</span>
+              <span className="faint">
+                {e.k === 'knock' ? 'knocked' : e.k === 'revive' ? 'revived' : ''}
+                {e.k === 'kill' &&
+                  weaponName(dictName(bundle.dicts, 'weapons', e.w as number))}
+              </span>
               <span style={{ color: victim?.b ? hex(BOT_COLOUR) : undefined }}>{victim?.n}</span>
-            </div>
+            </button>
           )
         })}
-        {rows.length === 0 && <div className="faint">no kills yet</div>}
+        {rows.length === 0 && <div className="faint">nothing yet</div>}
       </div>
     </div>
   )
@@ -195,13 +289,14 @@ function KillFeed({ bundle }: { bundle: ReplayBundle }) {
 function TeamList({
   bundle,
   tracked,
-  renderer,
+  follow,
+  onFollow,
 }: {
   bundle: ReplayBundle
   tracked: Set<string>
-  renderer: React.RefObject<Renderer | null>
+  follow: number | null
+  onFollow: (index: number | null) => void
 }) {
-  const [follow, setFollow] = useState<number | null>(null)
   const teams = useMemo(() => {
     const byTeam = new Map<number, { i: number; name: string; bot: boolean; acct: string }[]>()
     bundle.players.forEach((p, i) => {
@@ -217,11 +312,7 @@ function TeamList({
     })
   }, [bundle.players, tracked])
 
-  const click = (i: number) => {
-    const next = follow === i ? null : i
-    setFollow(next)
-    renderer.current?.followPlayer(next)
-  }
+  const click = (i: number) => onFollow(follow === i ? null : i)
 
   return (
     <div className="panel scroll">

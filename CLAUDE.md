@@ -53,6 +53,12 @@ uv run alembic upgrade head
 uv run alembic revision --autogenerate --rev-id 0003 -m "..."
 ```
 
+Live services are systemd **user** units — restart them after a backend change:
+
+```bash
+systemctl --user restart pubgd-api.service     # also: pubgd-worker, pubgd-poller
+```
+
 Frontend, from `frontend/` (Node via nvm: `. "$HOME/.nvm/nvm.sh"`):
 
 ```bash
@@ -175,8 +181,11 @@ Full list: BUILD-SPEC §6 (34 of them) and HANDOFF §5. The ones that bite most:
 - **Bots are ~19% of all kills and just over half of the tracked players'.**
   `kills_human` is the default everywhere; raw `kills` roughly doubles some K/Ds.
 - **`NULL != NULL` in Postgres**, so `heatmap_bins` uses `''` sentinels in its
-  primary key. Nullable "all" columns would make `ON CONFLICT DO UPDATE` never
-  fire and every reparse would append duplicates.
+  primary key for `account_id` and `game_mode`. Nullable "all" columns would
+  make `ON CONFLICT DO UPDATE` never fire and every reparse would append
+  duplicates. Note `match_type` deliberately does **not** follow this pattern —
+  it stores the real value, and "all types" is a query omitting the predicate,
+  because three values are cheaper to sum than to precompute.
 - **`roster.attributes.won` is the string `"true"`/`"false"`.** `bool("false")`
   is `True`.
 - **Zone field names are inverted.** `safetyZone*` is the **blue** damaging
@@ -195,8 +204,26 @@ Full list: BUILD-SPEC §6 (34 of them) and HANDOFF §5. The ones that bite most:
 - **`distance = -1` is a "not applicable" sentinel**, 8.6% of kills. Filter
   `> 0` in any "longest kill" query.
 - **`asset.attributes.URL` is uppercase.** It gates the entire replay feature.
+- **`allWeaponStats` fields are `shots` and `hits`** (plus `dBNOHits`), not
+  `shotsFired`/`hitCount`. Reading the wrong names produced `0` for all 5,978
+  participants, and because the columns are NOT NULL, `count(shots_fired)`
+  reported them fully populated. **`count()` of a non-nullable column proves
+  nothing** — use `count(*) FILTER (WHERE col > 0)`. Coverage is also tiny:
+  PUBG reports it for ~2 accounts per match and a *tracked* player in 3 of 65,
+  so `shots_fired == 0` means "not reported", never "fired nothing".
+- **`LogWeaponFireCount.fireCount` is quantised to multiples of 10** and omits
+  any weapon fired fewer than 10 times. It looks like an exact shot counter
+  and is not — 99 real shots report as 120.
 - **Every PUBG enum is open**, and casing changes between patches. Dispatch on
   lowercased names; never write an exhaustive switch without a default.
+
+## Testing wire formats
+
+A unit test whose fixture you wrote is not evidence about a wire format. The
+`allWeaponStats` bug had a passing unit test the whole time — written from the
+same invented field names as the code. **Assert against the corpus**, as
+`tests/test_telemetry_combat.py` does: those tests skip cleanly when `data/`
+is absent, so they cost a source-only checkout nothing.
 
 ## Migrations
 

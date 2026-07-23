@@ -1,0 +1,47 @@
+.feed-list { display: flex; flex-direction: column; }
+
+.feed-row {
+  display: flex; align-items: stretch;
+  border-bottom: 1px solid var(--bg-inset);
+}
+.feed-row:last-child { border-bottom: none; }
+.feed-row:hover { background: var(--bg-hover); }
+
+.feed-main {
+  flex: 1; display: grid; align-items: center; gap: 12px;
+  /* thumb · when · place · players · meta — players takes the slack so the
+     kill chips stay left-aligned against a stable placement column. */
+  grid-template-columns: 44px 108px 76px 1fr auto;
+  padding: 8px 10px; min-width: 0;
+}
+.feed-main:hover { color: inherit; }
+
+.feed-time { font-weight: 500; }
+.feed-when { min-width: 0; }
+
+.feed-place { display: flex; justify-content: flex-start; }
+
+.feed-players { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; }
+
+.feed-meta { display: flex; align-items: center; gap: 10px; justify-content: flex-end; }
+
+.feed-actions { display: flex; align-items: center; padding-right: 8px; }
+.replay-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; border-radius: var(--radius);
+  border: 1px solid var(--border); color: var(--text-dim); font-size: 12px;
+}
+.replay-btn:hover { border-color: var(--accent); color: var(--accent); }
+.replay-btn.disabled { color: var(--text-faint); border-color: transparent; cursor: default; }
+.replay-btn.disabled:hover { border-color: transparent; color: var(--text-faint); }
+
+/* Below the split point the meta column is the first thing to go: duration
+   and weather are context, not identity. */
+@media (max-width: 1100px) {
+  .feed-main { grid-template-columns: 44px 100px 70px 1fr; }
+  .feed-meta { display: none; }
+}
+@media (max-width: 720px) {
+  .feed-main { grid-template-columns: 44px 1fr auto; }
+  .feed-players { display: none; }
+}

@@ -67,6 +67,42 @@ export interface PlayerStats {
   walkDistanceM: number
   rideDistanceM: number
   includeBots: boolean
+
+  /**
+   * Σhits/Σshots — but **`shotsFired === 0` means "not reported", not
+   * "fired nothing"**. PUBG populates `allWeaponStats` for a median of 2
+   * accounts per match and for a tracked player in only 3 of 65 archived
+   * matches, so this is almost always absent. Render it only when
+   * `shotsFired > 0`; a headline 0% reads as a bug and is missing data.
+   */
+  accuracy: number
+  shotsFired: number
+  shotsHit: number
+  /** Headshot kills over *raw* kills — both count bots, so the ratio is
+   *  self-consistent. Always available. */
+  headshotRate: number
+  knocksHuman: number
+  roadKills: number
+  vehicleDestroys: number
+  teamKills: number
+  avgSurvivedS: number
+  /** Numerically lowest placement, i.e. the best. */
+  bestPlace: number
+}
+
+export interface PlacementBucket {
+  label: string
+  lo: number
+  hi: number | null
+  matches: number
+}
+
+export interface Nemesis {
+  accountId: string
+  name: string
+  killedBy: number
+  killed: number
+  lastSeen: string | null
 }
 
 export interface MatchSummary {
@@ -87,6 +123,72 @@ export interface MatchSummary {
   timeSurvived: number
   deathType: string
   hasReplay: boolean
+  knocks: number
+  headshotKills: number
+  /** Resolved through `participants` — bots kill often and have no player row. */
+  killedBy: string | null
+  killedByIsBot: boolean | null
+  deathWeapon: string | null
+  shotsFired: number | null
+  shotsHit: number | null
+  /** Lobby size, for rendering "#8 / 25" rather than a bare rank. */
+  numStartTeams: number | null
+}
+
+/** One tracked player's result in a match — the feed's payload. */
+export interface TrackedResult {
+  accountId: string
+  name: string
+  teamId: number
+  winPlace: number
+  kills: number
+  killsHuman: number | null
+  knocks: number
+  assists: number
+  damageDealt: number
+  timeSurvived: number
+  deathType: string
+  headshotKills: number
+  shotsFired: number | null
+  shotsHit: number | null
+  killedBy: string | null
+  killedByIsBot: boolean | null
+  deathWeapon: string | null
+}
+
+/**
+ * A match plus what the tracked players did in it.
+ *
+ * They are always on the same roster when they play together (verified across
+ * the archive, 0 counterexamples), so one `winPlace` describes the row.
+ */
+export interface MatchFeedRow {
+  matchId: string
+  playedAt: string
+  telemetryT0: string | null
+  mapName: string
+  mapDisplay: string
+  gameMode: string
+  matchType: string
+  durationS: number
+  hasReplay: boolean
+  parsed: boolean
+  weatherId: string | null
+  botCount: number | null
+  numStartPlayers: number | null
+  numStartTeams: number | null
+  teamSize: number | null
+  winPlace: number | null
+  won: boolean
+  results: TrackedResult[]
+}
+
+/** One day's aggregate of a single metric. */
+export interface TimeseriesPoint {
+  /** ISO date, `YYYY-MM-DD`. */
+  day: string
+  matches: number
+  value: number
 }
 
 export interface WeaponStat {
@@ -118,6 +220,23 @@ export interface ParticipantRow {
   winPlace: number
   deathType: string
   tracked: boolean
+  shotsFired: number | null
+  shotsHit: number | null
+  knocksHuman: number | null
+  /** CENTIMETRES, origin top-left, y growing downward. **No y flip.** */
+  landingX: number | null
+  landingY: number | null
+  deathX: number | null
+  deathY: number | null
+  diedAtS: number | null
+  killerAccountId: string | null
+  deathWeapon: string | null
+  weaponsAcquired: number
+  killStreaks: number
+  roadKills: number
+  vehicleDestroys: number
+  teamKills: number
+  swimDistance: number
 }
 
 export interface RosterRow {
@@ -145,6 +264,9 @@ export interface MatchDetail {
   parsed: boolean
   hasReplay: boolean
   botCount: number | null
+  numStartPlayers: number | null
+  numStartTeams: number | null
+  cameraView: string | null
   rosters: RosterRow[]
 }
 
@@ -154,14 +276,24 @@ export interface KillRow {
   victimAccountId: string
   victimName: string | null
   victimIsBot: boolean
+  victimTeamId: number
   killerAccountId: string | null
   killerName: string | null
+  killerIsBot: boolean | null
+  killerTeamId: number | null
   weapon: string | null
   damageReason: string | null
   /** Null when the source was the -1 "not applicable" sentinel. */
   distanceM: number | null
   isSuicide: boolean
   isTeamKill: boolean
+  /** CENTIMETRES. Killer coords are null for zone/fall/drown deaths. */
+  victimX: number
+  victimY: number
+  killerX: number | null
+  killerY: number | null
+  /** Already-resolved display names. */
+  assists: string[]
 }
 
 export interface Heatmap {
@@ -175,15 +307,46 @@ export interface Heatmap {
   cells: string
 }
 
-export interface RecentMatch {
+// ---------------------------------------------------------------------------
+// overview — one request for the whole home page
+// ---------------------------------------------------------------------------
+export interface FormEntry {
   matchId: string
   playedAt: string
-  mapName: string
+  winPlace: number
+  numStartTeams: number | null
+  kills: number
   mapDisplay: string
   gameMode: string
-  matchType: string
-  durationS: number
-  hasReplay: boolean
+}
+
+export interface PlayerSummary {
+  card: PlayerCard
+  /** Null when the player has no `official` matches — normal, not an error. */
+  stats: PlayerStats | null
+  /** Oldest first, so the strip reads left to right. */
+  form: FormEntry[]
+  /** The two trailing windows the trend arrows compare. Either may be null. */
+  recent: PlayerStats | null
+  previous: PlayerStats | null
+}
+
+export interface SessionSummary {
+  matches: number
+  startedAt: string
+  endedAt: string
+  bestPlace: number
+  wins: number
+  killsHuman: number
+  damage: number
+  spanS: number
+}
+
+export interface Overview {
+  players: PlayerSummary[]
+  matches: MatchFeedRow[]
+  health: Health
+  session: SessionSummary | null
 }
 
 export interface IngestStatus {

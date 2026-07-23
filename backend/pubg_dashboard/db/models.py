@@ -450,6 +450,19 @@ class HeatmapBin(Base):
     game_mode: Mapped[str] = mapped_column(
         String(24), primary_key=True, server_default=text("''")
     )
+    # The match's REAL type — no "" sentinel here, unlike the two columns
+    # above. There are only three distinct values, so "all types" is a query
+    # that simply omits the predicate and lets the existing SUM/GROUP BY
+    # aggregate them. Precomputing an "" aggregate row would double the table
+    # to save a three-row sum.
+    #
+    # Without this column, heatmaps counted `airoyale` and `tutorialatoz`
+    # while career stats counted `official` only: one tracked player showed
+    # 28 career kills against 48 binned. Both numbers were right; they
+    # answered different questions while sitting on the same screen.
+    match_type: Mapped[str] = mapped_column(
+        String(24), primary_key=True, server_default=text("'official'")
+    )
     # Bucketed so heatmaps can be filtered by date without storing per-match.
     day: Mapped[dt.date] = mapped_column(Date, primary_key=True)
     grid_x: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -457,5 +470,5 @@ class HeatmapBin(Base):
     count: Mapped[int] = mapped_column(Integer, default=0)
 
     __table_args__ = (
-        Index("ix_heatmap_lookup", "map_name", "kind", "account_id"),
+        Index("ix_heatmap_lookup", "map_name", "kind", "account_id", "match_type"),
     )

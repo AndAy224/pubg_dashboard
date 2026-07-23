@@ -93,6 +93,26 @@ class PlayerStats(ApiModel):
     ride_distance_m: float
     include_bots: bool
 
+    # --- telemetry-derived, present on every parsed match ------------------
+    #: Σ`shots_hit` / Σ`shots_fired`, 0.0 when nothing was fired. Taken from
+    #: LogMatchEnd.allWeaponStats rather than counted from attack events —
+    #: every throwable emits both LogPlayerAttack and LogPlayerUseThrowable
+    #: under one attackId, so counting events double-counts them.
+    accuracy: float
+    shots_fired: int
+    shots_hit: int
+    #: Headshot kills over *raw* kills: `headshot_kills` is the API's own
+    #: figure and counts bots, so dividing it by `kills_human` would overstate
+    #: the rate wherever bots were shot in the head.
+    headshot_rate: float
+    knocks_human: int
+    road_kills: int
+    vehicle_destroys: int
+    team_kills: int
+    avg_survived_s: float
+    #: Best (numerically lowest) placement over the filtered set.
+    best_place: int
+
 
 class MatchSummary(ApiModel):
     match_id: str
@@ -112,6 +132,18 @@ class MatchSummary(ApiModel):
     time_survived: float
     death_type: str
     has_replay: bool
+    knocks: int
+    headshot_kills: int
+    #: Who killed them, resolved through `participants`: ~19% of killers are
+    #: bots and have no `players` row at all, so joining there would blank
+    #: them rather than name them.
+    killed_by: str | None
+    killed_by_is_bot: bool | None
+    death_weapon: str | None
+    shots_fired: int | None
+    shots_hit: int | None
+    #: Teams in the lobby, for rendering "#8 / 25" rather than a bare rank.
+    num_start_teams: int | None
 
 
 class WeaponStat(ApiModel):
@@ -126,6 +158,32 @@ class TimeseriesPoint(ApiModel):
     day: dt.date
     matches: int
     value: float
+
+
+class PlacementBucket(ApiModel):
+    """One bar of the placement histogram."""
+
+    label: str
+    #: Inclusive placement range this bucket covers; `hi` is None for the tail.
+    lo: int
+    hi: int | None
+    matches: int
+
+
+class Nemesis(ApiModel):
+    """A human opponent, and the two-way kill record against them.
+
+    Names come from `participants`, never `players` — an opponent may have no
+    player row, and bots have none by construction.
+    """
+
+    account_id: str
+    name: str
+    #: Times they killed this player.
+    killed_by: int
+    #: Times this player killed them.
+    killed: int
+    last_seen: dt.datetime | None
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +210,84 @@ class ParticipantRow(ApiModel):
     win_place: int
     death_type: str
     tracked: bool
+
+    # --- telemetry-derived; NULL until the match is parsed -----------------
+    shots_fired: int | None
+    shots_hit: int | None
+    knocks_human: int | None
+    #: CENTIMETRES, origin top-left, y growing downward. **No y flip** — the
+    #: telemetry origin already matches canvas convention.
+    landing_x: float | None
+    landing_y: float | None
+    death_x: float | None
+    death_y: float | None
+    died_at_s: float | None
+    killer_account_id: str | None
+    death_weapon: str | None
+    weapons_acquired: int
+    kill_streaks: int
+    road_kills: int
+    vehicle_destroys: int
+    team_kills: int
+    swim_distance: float
+
+
+class TrackedResult(ApiModel):
+    """One tracked player's result in one match — the feed's payload.
+
+    This is the fix for a feed that listed matches without saying who played
+    or how they did.
+    """
+
+    account_id: str
+    name: str
+    team_id: int
+    win_place: int
+    kills: int
+    kills_human: int | None
+    knocks: int
+    assists: int
+    damage_dealt: float
+    time_survived: float
+    death_type: str
+    headshot_kills: int
+    shots_fired: int | None
+    shots_hit: int | None
+    killed_by: str | None
+    killed_by_is_bot: bool | None
+    death_weapon: str | None
+
+
+class MatchFeedRow(ApiModel):
+    """A match, plus what the tracked players did in it.
+
+    The tracked players are **always on the same roster** when they play
+    together — verified across the whole archive, 0 counterexamples — so one
+    `win_place` describes the row and the per-player detail is kills, not
+    competing placements.
+    """
+
+    match_id: str
+    played_at: dt.datetime
+    #: The real match start (LogMatchStart). `played_at` is the API's ingest
+    #: time and runs a few minutes late.
+    telemetry_t0: dt.datetime | None
+    map_name: str
+    map_display: str
+    game_mode: str
+    match_type: str
+    duration_s: int
+    has_replay: bool
+    parsed: bool
+    weather_id: str | None
+    bot_count: int | None
+    num_start_players: int | None
+    num_start_teams: int | None
+    team_size: int | None
+    #: The tracked roster's placement, NULL when no tracked player was in it.
+    win_place: int | None
+    won: bool
+    results: list[TrackedResult]
 
 
 class RosterRow(ApiModel):
@@ -180,6 +316,9 @@ class MatchDetail(ApiModel):
     parsed: bool
     has_replay: bool
     bot_count: int | None
+    num_start_players: int | None
+    num_start_teams: int | None
+    camera_view: str | None
     rosters: list[RosterRow]
 
 
@@ -189,8 +328,11 @@ class KillRow(ApiModel):
     victim_account_id: str
     victim_name: str | None
     victim_is_bot: bool
+    victim_team_id: int
     killer_account_id: str | None
     killer_name: str | None
+    killer_is_bot: bool | None
+    killer_team_id: int | None
     weapon: str | None
     damage_reason: str | None
     #: METRES, and `None` when the source value was the -1 "not applicable"
@@ -198,6 +340,14 @@ class KillRow(ApiModel):
     distance_m: float | None
     is_suicide: bool
     is_team_kill: bool
+    #: CENTIMETRES. Killer coordinates are NULL for zone/fall/drown deaths.
+    #: **No y flip**: telemetry's origin is top-left like canvas.
+    victim_x: float
+    victim_y: float
+    killer_x: float | None
+    killer_y: float | None
+    #: Display names of assisting players, already resolved.
+    assists: list[str]
 
 
 # ---------------------------------------------------------------------------
@@ -233,3 +383,64 @@ class IngestStatus(ApiModel):
     oldest_unparsed: dt.datetime | None
     poller_lag_s: float | None
     rate_limit_per_min: int
+
+
+# ---------------------------------------------------------------------------
+# overview — one request for the whole home page
+# ---------------------------------------------------------------------------
+class FormEntry(ApiModel):
+    """One square of the form strip: a recent result, newest last."""
+
+    match_id: str
+    played_at: dt.datetime
+    win_place: int
+    num_start_teams: int | None
+    kills: int
+    map_display: str
+    game_mode: str
+
+
+class PlayerSummary(ApiModel):
+    """A tracked player's home-page card.
+
+    `stats` is None when the player has no `official` matches yet — career
+    aggregates exclude `airoyale` and `tutorialatoz`, so a player who has only
+    played those is legitimately statless rather than broken.
+    """
+
+    card: PlayerCard
+    #: All-time over whatever the archive holds. PUBG drops match history
+    #: after ~14 days, so "all-time" is a rolling fortnight in practice.
+    stats: PlayerStats | None
+    form: list[FormEntry]
+    #: The two trailing windows the trend arrows compare. Either may be None
+    #: when that window contains no career matches — which is normal, not an
+    #: error, and must render as "no trend" rather than as a fall to zero.
+    recent: PlayerStats | None
+    previous: PlayerStats | None
+
+
+class SessionSummary(ApiModel):
+    """The most recent play session — matches separated by less than a gap.
+
+    Sessions are what people actually remember ("how did we do tonight"),
+    and a calendar day splits a session that runs past midnight.
+    """
+
+    matches: int
+    started_at: dt.datetime
+    ended_at: dt.datetime
+    best_place: int
+    wins: int
+    kills_human: int
+    damage: float
+    #: Wall-clock from first match start to last match end, not summed
+    #: durations — the gaps between matches are part of the session.
+    span_s: float
+
+
+class Overview(ApiModel):
+    players: list[PlayerSummary]
+    matches: list[MatchFeedRow]
+    health: Health
+    session: SessionSummary | None

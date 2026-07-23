@@ -4,6 +4,7 @@
   --bg:        #0e1116;
   --bg-raised: #151a21;
   --bg-inset:  #0a0d11;
+  --bg-hover:  #1a2028;
   --border:    #232a34;
   --border-strong: #333d4a;
 
@@ -18,10 +19,30 @@
   --info:        #58a6ff;
   --bot:         #6e7681;
 
+  /* --- Identity colours -------------------------------------------------
+     One hue per tracked player, used everywhere they appear: nav dots, kill
+     chips in the match feed, chart lines, form strips. This is what lets a
+     feed row say who did what without spending a word on it. Assigned by
+     account id in lib/players.ts, never by array position — a new tracked
+     player must not recolour the other two. */
+  --p-1: #f0b429;   /* amber  */
+  --p-2: #4cc9f0;   /* cyan   */
+  --p-3: #b388ff;   /* violet */
+  --p-4: #56d364;   /* green — spare, for a fourth tracked player */
+
+  /* --- Placement grading ------------------------------------------------
+     Placement is the game's scoreline, so it is graded identically on every
+     surface. Anything past #10 stays neutral: the difference between #34 and
+     #47 is not worth a colour. */
+  --place-win:   #f0b429;
+  --place-top5:  #d8dee6;
+  --place-top10: #6cb6ff;
+  --place-rest:  #5d6875;
+
   --radius: 6px;
   --radius-lg: 10px;
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 
-  --shell-nav: 216px;
+  --shell-nav: 232px;
 }

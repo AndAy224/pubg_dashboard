@@ -444,3 +444,257 @@ async def test_api_routes_are_not_shadowed_by_the_spa(client: httpx.AsyncClient)
     """The catch-all is mounted after every router; /api must still be JSON."""
     r = await client.get("/api/health")
     assert r.headers["content-type"].startswith("application/json")
+
+
+# ---------------------------------------------------------------------------
+# The enriched match feed
+# ---------------------------------------------------------------------------
+async def test_feed_says_who_played_and_where_they_finished(
+    client: httpx.AsyncClient,
+) -> None:
+    """The whole point of the feed rewrite.
+
+    A row that lists only map, mode and duration describes a match nobody can
+    identify. Every tracked-only row must carry a placement and at least one
+    named result.
+    """
+    r = await client.get("/api/matches?limit=10")
+    assert r.status_code == 200
+    rows = r.json()
+    if not rows:
+        pytest.skip("no matches ingested")
+
+    for row in rows:
+        assert row["results"], f"{row['matchId']} has no tracked results"
+        assert row["winPlace"] is not None
+        for result in row["results"]:
+            assert result["name"]
+            assert result["winPlace"] == row["winPlace"], (
+                "tracked players share a roster, so their placement must match "
+                "the row's — a disagreement means the roster join broke"
+            )
+
+
+async def test_feed_placement_and_kills_match_the_database(
+    client: httpx.AsyncClient,
+) -> None:
+    """Cross-check the feed against the tables it summarises."""
+    from pubg_dashboard.db.models import Participant
+
+    r = await client.get("/api/matches?limit=5")
+    rows = r.json()
+    if not rows:
+        pytest.skip("no matches ingested")
+
+    async with get_session() as session:
+        for row in rows:
+            for result in row["results"]:
+                p = (
+                    await session.execute(
+                        select(Participant).where(
+                            Participant.match_id == row["matchId"],
+                            Participant.account_id == result["accountId"],
+                        )
+                    )
+                ).scalar_one()
+                assert result["winPlace"] == p.win_place
+                assert result["kills"] == p.kills
+                assert result["killsHuman"] == p.kills_human
+
+
+async def test_feed_limit_counts_matches_not_participants(
+    client: httpx.AsyncClient,
+) -> None:
+    """The reason the feed is two statements rather than one join.
+
+    Joining tracked participants before LIMIT would multiply each match by the
+    number of tracked players in it, so a page of 5 would return 2 matches on
+    a night all three of them squadded.
+    """
+    r = await client.get("/api/matches?limit=5")
+    rows = r.json()
+    if len(rows) < 5:
+        pytest.skip("fewer than 5 matches ingested")
+    assert len(rows) == 5
+    assert len({row["matchId"] for row in rows}) == 5
+
+
+async def test_feed_keyset_pagination_does_not_repeat_rows(
+    client: httpx.AsyncClient,
+) -> None:
+    first = (await client.get("/api/matches?limit=3")).json()
+    if len(first) < 3:
+        pytest.skip("not enough matches")
+    cursor = first[-1]["playedAt"]
+    second = (await client.get(f"/api/matches?limit=3&before={cursor}")).json()
+    assert not ({r["matchId"] for r in first} & {r["matchId"] for r in second})
+
+
+# ---------------------------------------------------------------------------
+# Overview
+# ---------------------------------------------------------------------------
+async def test_overview_is_one_request_for_the_whole_home_page(
+    client: httpx.AsyncClient,
+) -> None:
+    r = await client.get("/api/overview")
+    assert r.status_code == 200
+    body = r.json()
+    assert {"players", "matches", "health", "session"} <= set(body)
+    assert body["health"]["matches"] >= 0
+    for p in body["players"]:
+        assert p["card"]["tracked"]
+        # `stats` may legitimately be null (no official matches), but the form
+        # strip must still be a list rather than missing.
+        assert isinstance(p["form"], list)
+
+
+async def test_overview_form_is_oldest_first(client: httpx.AsyncClient) -> None:
+    """The strip reads left to right, so the array must too."""
+    body = (await client.get("/api/overview")).json()
+    for p in body["players"]:
+        days = [f["playedAt"] for f in p["form"]]
+        assert days == sorted(days), f"{p['card']['name']} form is not chronological"
+
+
+async def test_overview_session_covers_a_contiguous_run(
+    client: httpx.AsyncClient,
+) -> None:
+    from pubg_dashboard.api.routers.players import SESSION_GAP_S
+
+    body = (await client.get("/api/overview")).json()
+    session = body["session"]
+    if session is None:
+        pytest.skip("no matches")
+    assert session["matches"] >= 1
+    assert session["startedAt"] <= session["endedAt"]
+    assert session["spanS"] >= 0
+    # A session must not span more than its own matches plus the permitted gaps.
+    assert session["spanS"] <= session["matches"] * (SESSION_GAP_S + 3600)
+
+
+# ---------------------------------------------------------------------------
+# Stats that the corpus can check
+# ---------------------------------------------------------------------------
+async def test_accuracy_is_absent_rather_than_zero(
+    client: httpx.AsyncClient, a_tracked_player: str
+) -> None:
+    """`shotsFired == 0` means PUBG did not report, not "fired nothing".
+
+    PUBG populates `allWeaponStats` for ~2 accounts per match, so this is the
+    normal case. What must never happen is a non-zero accuracy on zero shots,
+    which would be a fabricated statistic.
+    """
+    s = (await client.get(f"/api/players/{a_tracked_player}/stats")).json()
+    assert s["shotsFired"] >= 0
+    assert s["shotsHit"] <= s["shotsFired"] or s["shotsFired"] == 0
+    if s["shotsFired"] == 0:
+        assert s["accuracy"] == 0.0
+    else:
+        assert 0.0 < s["accuracy"] <= 1.0
+
+
+async def test_headshot_rate_uses_raw_kills_on_both_sides(
+    client: httpx.AsyncClient, a_tracked_player: str
+) -> None:
+    """`headshot_kills` is the API's figure and counts bots, so dividing it by
+    `kills_human` would report rates above 100%."""
+    s = (await client.get(f"/api/players/{a_tracked_player}/stats")).json()
+    assert 0.0 <= s["headshotRate"] <= 1.0
+    if s["kills"]:
+        assert s["headshotRate"] == pytest.approx(s["headshotKills"] / s["kills"])
+
+
+async def test_placements_cover_every_career_match(
+    client: httpx.AsyncClient, a_tracked_player: str
+) -> None:
+    """The buckets partition the range, so they must sum to the match count."""
+    stats = (await client.get(f"/api/players/{a_tracked_player}/stats")).json()
+    buckets = (await client.get(f"/api/players/{a_tracked_player}/placements")).json()
+    assert sum(b["matches"] for b in buckets) == stats["matches"]
+
+
+async def test_nemeses_exclude_bots_and_self(
+    client: httpx.AsyncClient, a_tracked_player: str
+) -> None:
+    """Bot ids are recycled — `ai.322` alone is 14 unrelated bots — so
+    grouping kills by one would invent a single arch-enemy."""
+    rows = (await client.get(f"/api/players/{a_tracked_player}/nemeses")).json()
+    for n in rows:
+        assert n["accountId"].startswith("account."), f"bot leaked in: {n}"
+        assert n["accountId"] != a_tracked_player
+        assert n["killedBy"] > 0 or n["killed"] > 0
+
+
+# ---------------------------------------------------------------------------
+# Heatmap match_type dimension
+# ---------------------------------------------------------------------------
+async def test_heatmap_official_agrees_with_kill_events(
+    client: httpx.AsyncClient, a_tracked_player: str
+) -> None:
+    """The reason `match_type` joined the primary key.
+
+    Binned kills for one player, filtered to `official`, must equal that
+    player's official kill_events rows exactly. Before the dimension existed
+    the heatmap silently included airoyale and tutorial matches while career
+    stats did not.
+    """
+    from pubg_dashboard.db.models import KillEvent
+
+    r = await client.get(
+        f"/api/heatmap?map=Baltic_Main&kind=kill&accountId={a_tracked_player}"
+        "&matchType=official"
+    )
+    assert r.status_code == 200
+    binned = r.json()["total"]
+
+    async with get_session() as session:
+        expected = await session.scalar(
+            select(func.count())
+            .select_from(KillEvent)
+            .join(Match, Match.match_id == KillEvent.match_id)
+            .where(
+                KillEvent.killer_account_id == a_tracked_player,
+                Match.match_type == "official",
+                Match.map_name == "Baltic_Main",
+            )
+        )
+    assert binned == expected
+
+
+async def test_heatmap_all_types_is_a_superset_of_official(
+    client: httpx.AsyncClient,
+) -> None:
+    """`all` is a sentinel, not an empty string: a client that drops empty
+    query parameters would otherwise silently get `official` back while
+    believing it asked for everything."""
+    official = (await client.get("/api/heatmap?kind=kill&matchType=official")).json()
+    every = (await client.get("/api/heatmap?kind=kill&matchType=all")).json()
+    assert every["total"] >= official["total"]
+
+
+async def test_heatmap_is_compressed(client: httpx.AsyncClient) -> None:
+    """A dense 256x256 Uint32 grid is ~350 KB of mostly-zero base64."""
+    r = await client.get(
+        "/api/heatmap?kind=movement&matchType=all", headers={"accept-encoding": "gzip"}
+    )
+    assert r.status_code == 200
+    # httpx transparently decodes, so check the header rather than the size.
+    assert r.headers.get("content-encoding") == "gzip"
+
+
+async def test_replay_bundle_is_not_double_compressed(
+    client: httpx.AsyncClient, a_match: str
+) -> None:
+    """The bundle is served still-gzipped from object storage. GZipMiddleware
+    must skip it rather than re-compressing an already-compressed body.
+
+    httpx, like a browser, transparently decodes one layer of
+    `Content-Encoding`, so `r.content` should already be MessagePack. Had the
+    middleware compressed it a second time, one layer of gzip would remain and
+    `unpackb` would fail on the gzip magic instead.
+    """
+    r = await client.get(f"/api/matches/{a_match}/replay")
+    assert r.status_code == 200
+    assert r.headers["content-encoding"] == "gzip"
+    bundle = msgpack.unpackb(r.content, raw=False)
+    assert bundle["matchId"] == a_match

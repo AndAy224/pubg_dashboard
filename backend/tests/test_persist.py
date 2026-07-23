@@ -27,6 +27,7 @@ from pubg_dashboard.telemetry.parse import MatchMeta, ParseResult
 
 DAY = dt.date(2026, 7, 22)
 MAP = "Baltic_Main"
+MATCH_TYPE = "official"
 
 
 def _test_dsn() -> str:
@@ -113,7 +114,7 @@ async def _totals(session: AsyncSession) -> tuple[int, int, int]:
 async def test_first_parse_writes_everything(session: AsyncSession) -> None:
     await persist_parse_result(
         session, _result(), replay_key="r", heat_ledger_key="h",
-        previous_ledger=None, was_parsed=False, map_name=MAP, day=DAY,
+        previous_ledger=None, was_parsed=False, map_name=MAP, match_type=MATCH_TYPE, day=DAY,
     )
     await session.commit()
     assert await _totals(session) == (15, 3, 2)
@@ -128,7 +129,7 @@ async def test_reparse_does_not_inflate_the_heatmap(session: AsyncSession) -> No
     first = _result()
     await persist_parse_result(
         session, first, replay_key="r", heat_ledger_key="h",
-        previous_ledger=None, was_parsed=False, map_name=MAP, day=DAY,
+        previous_ledger=None, was_parsed=False, map_name=MAP, match_type=MATCH_TYPE, day=DAY,
     )
     await session.commit()
     before = await _totals(session)
@@ -140,7 +141,7 @@ async def test_reparse_does_not_inflate_the_heatmap(session: AsyncSession) -> No
     for _ in range(3):
         await persist_parse_result(
             session, _result(), replay_key="r", heat_ledger_key="h",
-            previous_ledger=ledger, was_parsed=True, map_name=MAP, day=DAY,
+            previous_ledger=ledger, was_parsed=True, map_name=MAP, match_type=MATCH_TYPE, day=DAY,
         )
         await session.commit()
 
@@ -152,7 +153,7 @@ async def test_reparse_without_a_ledger_is_refused(session: AsyncSession) -> Non
     with pytest.raises(ReparseWithoutLedgerError, match="cannot be subtracted"):
         await persist_parse_result(
             session, _result(), replay_key="r", heat_ledger_key="h",
-            previous_ledger=None, was_parsed=True, map_name=MAP, day=DAY,
+            previous_ledger=None, was_parsed=True, map_name=MAP, match_type=MATCH_TYPE, day=DAY,
         )
 
 
@@ -164,7 +165,7 @@ async def test_a_shrinking_parse_leaves_no_phantom_kills(session: AsyncSession) 
     """
     await persist_parse_result(
         session, _result(kills=5), replay_key="r", heat_ledger_key="h",
-        previous_ledger=None, was_parsed=False, map_name=MAP, day=DAY,
+        previous_ledger=None, was_parsed=False, map_name=MAP, match_type=MATCH_TYPE, day=DAY,
     )
     await session.commit()
     assert (await _totals(session))[2] == 5
@@ -172,7 +173,7 @@ async def test_a_shrinking_parse_leaves_no_phantom_kills(session: AsyncSession) 
     ledger = [("movement", "account.a", "squad-fpp", i, 0, 5) for i in range(3)]
     await persist_parse_result(
         session, _result(kills=2), replay_key="r", heat_ledger_key="h",
-        previous_ledger=ledger, was_parsed=True, map_name=MAP, day=DAY,
+        previous_ledger=ledger, was_parsed=True, map_name=MAP, match_type=MATCH_TYPE, day=DAY,
     )
     await session.commit()
     assert (await _totals(session))[2] == 2
@@ -187,7 +188,7 @@ async def test_reversal_does_not_leave_dead_zero_rows(session: AsyncSession) -> 
     first = _result()
     await persist_parse_result(
         session, first, replay_key="r", heat_ledger_key="h",
-        previous_ledger=None, was_parsed=False, map_name=MAP, day=DAY,
+        previous_ledger=None, was_parsed=False, map_name=MAP, match_type=MATCH_TYPE, day=DAY,
     )
     await session.commit()
 
@@ -199,7 +200,7 @@ async def test_reversal_does_not_leave_dead_zero_rows(session: AsyncSession) -> 
     empty.heatmap_rows = []
     await persist_parse_result(
         session, empty, replay_key="r", heat_ledger_key="h",
-        previous_ledger=ledger, was_parsed=True, map_name=MAP, day=DAY,
+        previous_ledger=ledger, was_parsed=True, map_name=MAP, match_type=MATCH_TYPE, day=DAY,
     )
     await session.commit()
 

@@ -169,6 +169,7 @@ async def parse_telemetry(ctx: IngestContext, match_id: str) -> None:
                     Match.telemetry_key,
                     Match.shard,
                     Match.game_mode,
+                    Match.match_type,
                     Match.map_name,
                     Match.played_at,
                     Match.telemetry_parsed_at,
@@ -179,7 +180,7 @@ async def parse_telemetry(ctx: IngestContext, match_id: str) -> None:
 
     if row is None:
         raise MissingMatchError(f"no match row for {match_id}")
-    key, shard, game_mode, map_name, played_at, parsed_at, ledger_key = row
+    key, shard, game_mode, match_type, map_name, played_at, parsed_at, ledger_key = row
     if not key:
         raise MissingMatchError(
             f"{match_id} has no stored telemetry; run fetch_telemetry first"
@@ -192,6 +193,7 @@ async def parse_telemetry(ctx: IngestContext, match_id: str) -> None:
         match_id=match_id,
         shard=shard,
         game_mode=game_mode,
+        match_type=match_type,
         played_at=played_at,
     )
 
@@ -220,6 +222,7 @@ async def parse_telemetry(ctx: IngestContext, match_id: str) -> None:
             previous_ledger=previous,
             was_parsed=parsed_at is not None,
             map_name=map_name,
+            match_type=match_type,
             day=played_at.astimezone(dt.UTC).date(),
         )
 

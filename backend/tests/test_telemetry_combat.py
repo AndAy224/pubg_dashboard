@@ -254,7 +254,46 @@ def test_longest_kill_ignores_the_minus_one_sentinel() -> None:
 
 
 def test_accuracy_comes_from_all_weapon_stats() -> None:
-    """Re-deriving from attack events double-counts every throwable."""
+    """The wire field names are `shots` and `hits` — measured, not documented.
+
+    This test previously asserted `shotsFired` / `hitCount`, matching the
+    parser, and passed. Neither name exists in the payload PUBG actually
+    sends, so both counters summed to zero for all 5,978 archived
+    participants — and because the columns were non-NULL zeros,
+    `count(shots_fired)` reported them as fully populated.
+
+    `dBNOHits` is summed into hits: `hits` counts shots that connected with a
+    standing target, `dBNOHits` those that connected with a knocked one, and
+    accuracy wants both.
+    """
+    ct = CombatTracker(t0_s=0.0)
+    ct.feed(
+        {
+            "_T": "LogMatchEnd",
+            "_D": "2026-07-22T00:30:00.000Z",
+            "allWeaponStats": [
+                {
+                    "accountId": "k",
+                    "stats": [
+                        {"weapon": "WeapMini14_C", "shots": 63, "hits": 8, "dBNOHits": 0},
+                        {"weapon": "WeapMP5K_C", "shots": 99, "hits": 3, "dBNOHits": 2},
+                    ],
+                },
+            ],
+        }
+    )
+    assert ct.players["k"].shots_fired == 162
+    assert ct.players["k"].shots_hit == 13
+
+
+def test_the_old_field_names_are_not_silently_accepted() -> None:
+    """A payload using the names the parser used to expect must count zero.
+
+    Guards against someone "restoring" the old spelling as a fallback: an
+    `or` chain over both would resurrect the silent-zero bug the moment PUBG
+    renamed anything, because a missing key and a zero are indistinguishable
+    downstream.
+    """
     ct = CombatTracker(t0_s=0.0)
     ct.feed(
         {
@@ -265,8 +304,8 @@ def test_accuracy_comes_from_all_weapon_stats() -> None:
             ],
         }
     )
-    assert ct.players["k"].shots_fired == 40
-    assert ct.players["k"].shots_hit == 9
+    assert ct.players["k"].shots_fired == 0
+    assert ct.players["k"].shots_hit == 0
 
 
 # ---------------------------------------------------------------------------
@@ -326,6 +365,46 @@ def test_corpus_kills_match_the_api_exactly() -> None:
 
     assert not mismatches, f"{len(mismatches)} disagreements: {mismatches[:5]}"
     assert agree > 1000
+
+
+def test_corpus_all_weapon_stats_produce_real_shot_counts() -> None:
+    """The regression test the original bug needed.
+
+    The unit test above pins the field names, but a unit test written from the
+    same wrong assumption as the code is worth nothing — which is exactly what
+    happened. This reads real payloads instead, and fails if the parser ever
+    again produces a corpus-wide zero.
+
+    It also pins the coverage limit, because that shapes the UI: PUBG
+    populates `allWeaponStats` for only a couple of accounts per match, so
+    `shots_fired == 0` must be read as "not reported" and never as "fired
+    nothing".
+    """
+    pairs = _corpus_pairs(20)
+    if not pairs:
+        pytest.skip("no archived corpus; run scripts/panic_archive.py")
+
+    total_shots = 0
+    total_hits = 0
+    covered: list[int] = []
+    for tele_path, _ in pairs:
+        evs = reader.load(tele_path.read_bytes())
+        ct = CombatTracker(0.0)
+        for e in evs:
+            ct.feed(e)
+        with_stats = [p for p in ct.players.values() if p.shots_fired > 0]
+        covered.append(len(with_stats))
+        total_shots += sum(p.shots_fired for p in with_stats)
+        total_hits += sum(p.shots_hit for p in with_stats)
+
+    assert total_shots > 0, "allWeaponStats parsed to zero shots across the corpus"
+    # Hits cannot exceed shots, and an accuracy of 100% would mean the two
+    # fields have been crossed.
+    assert 0 < total_hits < total_shots
+
+    # Measured: a median of 2 accounts per match, never more than 4. If PUBG
+    # starts reporting everyone, this fires and the UI can stop apologising.
+    assert max(covered) <= 8, f"coverage grew: {covered}"
 
 
 def test_corpus_double_deaths_are_real_and_common() -> None:

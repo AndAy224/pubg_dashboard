@@ -70,14 +70,30 @@ td.r, th.r { text-align: right; }
 .empty { color: var(--text-faint); padding: 24px; text-align: center; }
 
 /* --- Home ---------------------------------------------------------------- */
-.cards { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
-.player-card { display: grid; gap: 12px; }
+.cards { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+.player-card {
+  display: grid; gap: 12px;
+  border-top: 2px solid var(--border);
+}
 .tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
-.tile { background: var(--bg-inset); border-radius: var(--radius); padding: 8px 10px; }
-.tile-label { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-faint); }
-.tile-value { font-size: 19px; font-weight: 600; line-height: 1.25; }
-.tile-sub { font-size: 10px; }
 .small { font-size: 12px; }
+
+/* The session bar: what happened the last time they played. */
+.session-bar {
+  display: flex; align-items: center; gap: 24px; flex-wrap: wrap;
+  background: var(--bg-raised); border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-lg); padding: 12px 18px;
+}
+.session-label { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--accent); font-weight: 700; }
+.session-stats { display: flex; gap: 26px; flex-wrap: wrap; }
+.session-stat { text-align: left; }
+.session-value { font-size: 20px; font-weight: 700; line-height: 1.1; }
+.session-value.accent { color: var(--accent); }
+.session-stat-label { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-faint); }
+
+.linkish { color: var(--text-dim); }
+.linkish:hover { color: var(--accent); }
 
 /* --- Player -------------------------------------------------------------- */
 .tiles.wide { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
@@ -92,8 +108,17 @@ td.r, th.r { text-align: right; }
 .roster-head { display: flex; align-items: center; gap: 8px; padding: 4px 10px; font-size: 12px; }
 .swatch { width: 10px; height: 10px; border-radius: 2px; flex: 0 0 10px; }
 .roster table td { border-bottom: none; padding: 3px 10px; }
+.roster table th { font-size: 10px; padding: 4px 10px; }
 tr.tracked td { background: #1c2530; }
 tr.tracked td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
+
+.hero-result { text-align: right; }
+.hs-glyph { color: var(--accent); font-size: 11px; }
+.tag.bad-tag { color: var(--bad); border-color: var(--bad); margin-left: 6px; }
+tr.teamkill td { background: #2a1a1c; }
+
+/* The leader in a compare column, so the eye lands on it without reading. */
+td.lead { color: var(--accent); font-weight: 700; }
 
 /* --- Maps ---------------------------------------------------------------- */
 .mapwrap {
@@ -105,3 +130,66 @@ tr.tracked td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
 }
 .row.wrap { flex-wrap: wrap; }
 code { font-family: var(--mono); background: var(--bg-inset); padding: 1px 5px; border-radius: 4px; }
+
+/* --- Filter bars ---------------------------------------------------------- */
+.filters {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 10px 12px; background: var(--bg-raised);
+  border: 1px solid var(--border); border-radius: var(--radius-lg);
+}
+.filters label {
+  font-size: 10px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--text-faint); margin-right: -4px;
+}
+.seg { display: flex; gap: 0; }
+.seg button {
+  border-radius: 0; border-right-width: 0;
+  font-size: 12px; padding: 5px 9px;
+}
+.seg button:first-child { border-radius: var(--radius) 0 0 var(--radius); }
+.seg button:last-child { border-radius: 0 var(--radius) var(--radius) 0; border-right-width: 1px; }
+
+/* --- Page hero ------------------------------------------------------------ */
+.hero {
+  position: relative; overflow: hidden;
+  border: 1px solid var(--border); border-radius: var(--radius-lg);
+  padding: 20px 22px; min-height: 104px;
+  display: flex; align-items: center; gap: 20px; flex-wrap: wrap;
+}
+/* The map tile sits behind the header, heavily darkened — texture, not
+   decoration you have to read through. */
+.hero-bg {
+  position: absolute; inset: 0; z-index: 0;
+  background-size: cover; background-position: center;
+  opacity: .18; filter: saturate(.7);
+}
+.hero-bg::after {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(100deg, var(--bg-raised) 12%, transparent 90%);
+}
+.hero > * { position: relative; z-index: 1; }
+.hero h1 { font-size: 26px; }
+
+/* --- Section nav ---------------------------------------------------------- */
+.section-nav {
+  display: flex; gap: 4px; flex-wrap: wrap;
+  border-bottom: 1px solid var(--border); padding-bottom: 0;
+}
+.section-nav a, .section-nav button {
+  background: none; border: none; border-bottom: 2px solid transparent;
+  border-radius: 0; padding: 8px 12px; color: var(--text-dim); font-weight: 500;
+}
+.section-nav a:hover, .section-nav button:hover { color: var(--text); border-color: var(--border-strong); }
+.section-nav .on { color: var(--accent); border-bottom-color: var(--accent); background: none; font-weight: 600; }
+
+.heatgrid { display: grid; gap: 16px; }
+
+.notice {
+  background: #1c2530; border: 1px solid var(--border-strong);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius); padding: 9px 14px; cursor: pointer;
+}
+
+.chart-card { min-height: 220px; }
+.charts { display: grid; grid-template-columns: 1.5fr 1fr; gap: 14px; }
+@media (max-width: 1000px) { .charts { grid-template-columns: 1fr; } }

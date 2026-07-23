@@ -11,7 +11,7 @@ from __future__ import annotations
 import base64
 import datetime as dt
 from array import array
-from typing import Annotated
+from typing import Annotated, Final
 
 from fastapi import APIRouter, Query
 from sqlalchemy import and_, func, select
@@ -23,6 +23,11 @@ from pubg_dashboard.telemetry.heatmap import GRID, KINDS
 from pubg_dashboard.telemetry.maps import world_size
 
 router = APIRouter(tags=["heatmap"])
+
+#: `matchType` value meaning "every type". A sentinel and not `""` because
+#: clients drop empty query parameters, and a dropped filter would silently
+#: fall back to `official`.
+ALL_MATCH_TYPES: Final = "all"
 
 
 @router.get("/heatmap", response_model=Heatmap)
@@ -36,6 +41,16 @@ async def heatmap(
     game_mode: Annotated[
         str | None, Query(alias="gameMode", description="Omit for all modes.")
     ] = None,
+    match_type: Annotated[
+        str,
+        Query(
+            alias="matchType",
+            description=(
+                "Match type to count. Defaults to 'official', which is the set "
+                "career stats count. Pass 'all' to aggregate every type."
+            ),
+        ),
+    ] = "official",
     since: Annotated[dt.date | None, Query()] = None,
     until: Annotated[dt.date | None, Query()] = None,
 ) -> Heatmap:
@@ -48,14 +63,20 @@ async def heatmap(
     Row-major (`y * grid + x`), and **y is not flipped** — telemetry's origin
     is top-left with y growing downward, exactly like canvas.
 
-    **Known inconsistency with career stats.** `heatmap_bins` has no
-    `match_type` dimension, so these counts include `airoyale` and
-    `tutorialatoz` while `/players/{id}/stats` counts `official` only. One
-    tracked player shows 28 career kills against 48 binned. Neither number is
-    wrong, but they answer different questions and a UI that puts them side by
-    side should say so. Fixing it properly means adding `match_type` to the
-    bin key and reparsing — cheap in wall-clock (the raw telemetry is all
-    stored) but it is a schema change, so it is deliberately not done here.
+    `match_type` defaults to `official`, which is what career stats count, so
+    the two agree by default. It previously had no such dimension and always
+    included `airoyale` and `tutorialatoz`, which is why one tracked player
+    showed 28 career kills against 48 binned.
+
+    Pass the literal `all` to aggregate every type. It is a sentinel rather
+    than an empty string because clients drop empty query parameters — this
+    one's own frontend does — and a silently dropped filter would fall back
+    to `official` while the UI claimed to be showing everything.
+
+    Note the asymmetry with `account_id` and `game_mode`: those use `''` as a
+    real "all" value stored in the primary key, because summing across every
+    account would be a table scan. `match_type` has three values, so "all" is
+    simply the absence of a predicate.
     """
     where = [
         HeatmapBin.map_name == map_name,
@@ -65,6 +86,8 @@ async def heatmap(
         HeatmapBin.account_id == (account_id or ""),
         HeatmapBin.game_mode == (game_mode or ""),
     ]
+    if match_type and match_type != ALL_MATCH_TYPES:
+        where.append(HeatmapBin.match_type == match_type)
     if since:
         where.append(HeatmapBin.day >= since)
     if until:

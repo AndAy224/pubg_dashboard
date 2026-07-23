@@ -1,13 +1,17 @@
+import { useEffect } from 'react'
 import { NavLink, Outlet } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
 import { get } from '../api/client'
-import type { Health } from '../api/types'
+import type { Health, PlayerCard } from '../api/types'
+import { ago, num } from '../lib/format'
+import { playerColour, registerPlayers } from '../lib/players'
 import './AppShell.css'
 
 const NAV = [
-  { to: '/', label: 'Overview', end: true },
-  { to: '/heatmaps', label: 'Heatmaps' },
-  { to: '/settings', label: 'Settings' },
+  { to: '/', label: 'Overview', icon: '⌂', end: true },
+  { to: '/matches', label: 'Matches', icon: '≣' },
+  { to: '/heatmaps', label: 'Heatmaps', icon: '▦' },
+  { to: '/compare', label: 'Compare', icon: '⇄' },
 ]
 
 function IngestBadge() {
@@ -25,13 +29,52 @@ function IngestBadge() {
   const broken = !data.db || !data.storage || data.queueFailed > 0
 
   return (
-    <div className="badge" title={`${data.matches} matches, ${data.parsed} parsed`}>
+    <div className="badge" title={`${data.matches} matches, ${data.parsed} parsed · parser v${data.parserVersion}`}>
       <span className={`dot ${broken ? 'bad' : stale ? 'warn' : 'ok'}`} />
       <span className="num">{data.parsed}</span>
       <span className="faint">/{data.matches}</span>
       {data.queuePending > 0 && <span className="faint">· {data.queuePending} queued</span>}
       {broken && <span className="bad">· check ingest</span>}
     </div>
+  )
+}
+
+/**
+ * The tracked players, in the nav.
+ *
+ * Three people are the entire point of this dashboard; reaching their pages
+ * previously meant finding them in a table first.
+ */
+function TrackedNav() {
+  const { data } = useQuery({
+    queryKey: ['players', 'tracked'],
+    queryFn: () => get<PlayerCard[]>('/players', { tracked: true }),
+    staleTime: 5 * 60_000,
+  })
+
+  useEffect(() => {
+    if (data) registerPlayers(data.map((p) => p.accountId))
+  }, [data])
+
+  if (!data?.length) return null
+  return (
+    <>
+      <div className="nav-sep" />
+      {data.map((p) => (
+        <NavLink key={p.accountId} to={`/players/${p.accountId}`} className="navlink player">
+          <span className="dot-lg" style={{ background: playerColour(p.accountId) }} />
+          <span className="nav-name">{p.name}</span>
+          <span className="faint nav-sub">{num(p.matches)}</span>
+        </NavLink>
+      ))}
+      <div className="nav-hint faint" title="last poll of the stalest tracked player">
+        {data.some((p) => p.consecutivePollFailures > 0) ? (
+          <span className="bad">poll failures</span>
+        ) : (
+          <>polled {ago(data[0]?.lastPolledAt)}</>
+        )}
+      </div>
+    </>
   )
 }
 
@@ -44,10 +87,18 @@ export function AppShell() {
         </div>
         {NAV.map((n) => (
           <NavLink key={n.to} to={n.to} end={n.end} className="navlink">
-            {n.label}
+            <span className="nav-icon">{n.icon}</span>
+            <span className="nav-name">{n.label}</span>
           </NavLink>
         ))}
+
+        <TrackedNav />
+
         <div className="spacer" />
+        <NavLink to="/settings" className="navlink">
+          <span className="nav-icon">⚙</span>
+          <span className="nav-name">Settings</span>
+        </NavLink>
         <IngestBadge />
       </nav>
       <main className="content">

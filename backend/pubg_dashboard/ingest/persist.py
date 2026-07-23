@@ -52,6 +52,7 @@ async def persist_parse_result(
     previous_ledger: list[tuple[str, str, str, int, int, int]] | None,
     was_parsed: bool,
     map_name: str,
+    match_type: str,
     day: dt.date,
 ) -> None:
     """Persist one parse. Safe to run repeatedly for the same match."""
@@ -73,13 +74,16 @@ async def persist_parse_result(
 
     # --- heatmap bins: reverse the old contribution, then add the new ------
     if previous_ledger:
+        # `match_type` is not in the ledger because every bin a single match
+        # contributes carries that match's type — it is a constant, not a
+        # dimension, so it is reapplied here rather than stored 400k times.
         await _apply_heat(
             session,
             [
                 {
                     "map_name": map_name, "kind": kind, "account_id": account,
-                    "game_mode": mode, "day": day, "grid_x": gx, "grid_y": gy,
-                    "count": -count,
+                    "game_mode": mode, "match_type": match_type, "day": day,
+                    "grid_x": gx, "grid_y": gy, "count": -count,
                 }
                 for kind, account, mode, gx, gy, count in previous_ledger
             ],
@@ -160,9 +164,12 @@ async def _apply_heat(session: AsyncSession, rows: list[dict[str, Any]]) -> None
         stmt = pg_insert(HeatmapBin).values(chunk)
         await session.execute(
             stmt.on_conflict_do_update(
+                # Every primary-key column, in order. Omitting one makes
+                # Postgres fail to infer the constraint rather than silently
+                # matching a different one.
                 index_elements=[
                     HeatmapBin.map_name, HeatmapBin.kind, HeatmapBin.account_id,
-                    HeatmapBin.game_mode, HeatmapBin.day,
+                    HeatmapBin.game_mode, HeatmapBin.match_type, HeatmapBin.day,
                     HeatmapBin.grid_x, HeatmapBin.grid_y,
                 ],
                 set_={"count": HeatmapBin.count + stmt.excluded.count},

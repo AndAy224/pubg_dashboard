@@ -7,21 +7,34 @@
   border-right: 1px solid var(--border);
   padding: 16px 12px;
   display: flex; flex-direction: column; gap: 2px;
+  overflow-y: auto;
 }
 .brand { font-weight: 700; font-size: 15px; letter-spacing: -0.02em; padding: 4px 10px 14px; }
 
 .navlink {
+  display: flex; align-items: center; gap: 10px;
   padding: 7px 10px; border-radius: var(--radius);
   color: var(--text-dim); font-weight: 500;
 }
 .navlink:hover { background: var(--bg-inset); color: var(--text); }
 .navlink.active { background: var(--bg-inset); color: var(--accent); }
+.nav-icon { width: 14px; text-align: center; opacity: .8; font-size: 13px; }
+.nav-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nav-sub { font-size: 11px; font-family: var(--mono); }
+
+/* A tracked player keeps their identity colour in the nav even when active,
+   so the dot means the same thing here as on every match row. */
+.navlink.player.active { color: var(--text); }
+.dot-lg { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 9px; }
+
+.nav-sep { height: 1px; background: var(--border); margin: 10px 10px 8px; }
+.nav-hint { font-size: 11px; padding: 4px 10px 0; }
 
 .content { flex: 1; overflow: auto; padding: 22px 26px 60px; }
 
 .badge {
   display: flex; align-items: center; gap: 6px;
-  font-size: 12px; padding: 7px 10px;
+  font-size: 12px; padding: 7px 10px; margin-top: 6px;
   border-top: 1px solid var(--border); color: var(--text-dim);
 }
 .dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 8px; }

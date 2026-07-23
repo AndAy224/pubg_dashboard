@@ -259,13 +259,28 @@ Steps 1–4 of the original list are **done** (see §10). What remains, in order
    `/ingest` mutate state and spend rate-limit budget. An SSH tunnel
    (`ssh -L 8000:localhost:8000 pubg@<host>`) works today with no change.
    Binding to the LAN means accepting unauthenticated access from it.
-2. Give `heatmap_bins` a `match_type` dimension. Heatmaps currently include
-   `airoyale`/`tutorialatoz` while career stats count `official` only — one
-   tracked player shows 28 career kills against 48 binned. It is a schema
-   change plus a reparse; the reparse is free and idempotent.
-3. Frontend polish: the replay has no inventory panel or match strip yet
-   (BUILD-SPEC §4.5 / §5.2), and there are no trend charts on the player page
-   — `recharts` is installed but unused, so it tree-shakes out of the bundle.
+2. ~~Give `heatmap_bins` a `match_type` dimension.~~ **Done** — migration
+   0003, parser v3. It carries the real match type with **no `''` "all"
+   sentinel**, unlike `account_id` and `game_mode`: there are only three
+   values, so "all types" is a query that omits the predicate and lets the
+   existing SUM/GROUP BY aggregate. An `''` aggregate row would have doubled
+   the table to save summing three rows. The API's `matchType` defaults to
+   `official` so heatmaps and career stats now agree by default; pass the
+   literal `all` for every type (a sentinel, not an empty string, because
+   clients drop empty query parameters and a silently dropped filter would
+   fall back to `official` while the UI claimed otherwise).
+
+   Verified after reparse: for each tracked player, official-only binned
+   kills == official `kill_events` rows == raw `kills`, exactly. The
+   remaining gap to `kills_human` is the bot axis, which is a separate and
+   deliberate distinction — heatmap bins count bots, career K/D does not.
+
+   The migration **truncates the bins and clears the parse markers** rather
+   than backfilling. Backfilling to one literal would mislabel the 12
+   non-`official` matches, and the stored ledgers record contributions under
+   the *old* key, so replaying one against the new key would subtract from
+   rows that do not exist and drive bins negative.
+3. ~~Frontend polish.~~ **Done** — see §13.
 4. `logging.py` (structlog config) and `backend/README.md`.
 
 ### Settled — do not re-research
@@ -398,3 +413,111 @@ trap. Fixed: fields now render "plus N non-enumerated (float) value(s)".
 corpus emits **`"backpack"`, entirely lowercase**, 12,521 times, and no other
 spelling appears. Three spellings from three sources — which is the argument
 for normalising rather than tracking whichever is current.
+
+**3. `allWeaponStats` was read with field names PUBG does not send.**
+Found 2026-07-22 while building the accuracy stat. `combat.py` read
+`shotsFired` and `hitCount`/`shotsHit`; the wire format is **`shots`** and
+**`hits`** (plus `dBNOHits`, `damage`, `dBNODamage`, `holdingTime`,
+`hitDetails`). Every lookup missed, so `shots_fired` and `shots_hit` were
+`0` for all 5,978 archived participants.
+
+It hid the way everything here hides. The columns are NOT NULL, so
+`count(shots_fired)` returned 5,978 and read as "fully populated" — the
+number was checked, and the check confirmed the wrong thing. Ask for
+`count(*) FILTER (WHERE shots_fired > 0)` instead; it returned 0.
+
+`tests/test_telemetry_combat.py` had a unit test for this, and it passed,
+because it was written from the same assumption as the code — a
+hand-written fixture using the same two invented names. **A unit test whose
+fixture you wrote is not evidence about a wire format.** There is now a
+corpus-backed regression test beside it that fails on a corpus-wide zero,
+and a second one asserting the old names produce nothing, so no one
+"restores" them as a fallback.
+
+Two things were measured while diagnosing it, both worth keeping:
+
+* **`LogWeaponFireCount.fireCount` cannot substitute.** It is a periodic
+  ping quantised to multiples of 10 — checked against `allWeaponStats` on
+  the same matches, 99 real shots report as 120, 63 as 60, 276 as 270, and
+  a weapon fired fewer than 10 times is never reported at all. It looks
+  like an exact counter and is not.
+* **Coverage is severe and is the real limit.** PUBG populates
+  `allWeaponStats` for a median of **2 accounts per match** (max 4 across
+  the archive), and for a *tracked* player in only **3 of 65 matches**.
+  Fixing the names made the data correct without making it available. So
+  `shots_fired == 0` means **"not reported"**, never "fired nothing", and
+  every surface treats it that way: the player page prints "—  not
+  reported by PUBG" rather than a headline 0%.
+
+Parser bumped to v2 for the fix (v3 for the heatmap change below).
+
+---
+
+## 13. UI overhaul, 2026-07-22
+
+Plan and audit: [`docs/UI-OVERHAUL.md`](docs/UI-OVERHAUL.md). The prompt was
+that the dashboard under-delivered — most sharply that the recent-matches feed
+did not say **which tracked player played or where they finished**, which are
+the two facts the page exists to convey.
+
+### The feed fix
+`GET /api/matches` never touched `participants`. It now returns `MatchFeedRow`
+with the tracked roster's placement, per-player kills (human-only, with the raw
+figure alongside), knocks, damage, and who killed them with what — the last
+resolved through a `participants` self-join, because ~19% of killers are bots
+and bots have **no `players` row at all**, so joining there would blank them.
+
+Two facts shaped it, both measured rather than assumed:
+
+* The three tracked players are **always on the same roster** when they play
+  together — 0 counterexamples across the archive, 48 of 65 matches have ≥2 of
+  them. So a row carries **one** placement and per-player kill counts, not
+  three competing placements.
+* The feed is **two statements, not one join**. Joining tracked participants
+  before `LIMIT` multiplies each match by the number of tracked players in it,
+  so a page of 20 silently returns 8 matches on a night all three squadded.
+  There is a test for this.
+
+### New API surface
+`/api/overview` (the whole home page in one request — was five),
+`/players/{id}/placements`, `/players/{id}/nemeses` (humans only, and not a
+toggle: `ai.<n>` ids are recycled, so grouping kills by one invents a single
+arch-enemy out of dozens), `/players/{id}/sessions`, `kd` and `accuracy`
+metrics on `/timeseries`, kill/killer **positions** on `/matches/{id}/kills`
+(stored since the parser was written, never previously served), and
+`matchType` on `/heatmap`.
+
+### Efficiency, measured
+* **GZip middleware.** The heatmap was 349,638 B and ignored `Accept-Encoding`
+  entirely; it is now **31,381 B**. Starlette skips responses that already
+  carry `Content-Encoding`, which is what keeps it from re-compressing the
+  replay bundle — there is a test that unpacks the bundle to prove it.
+* Overview: 5 requests → 1.
+* Recharts (415 KB) is behind a lazy route. The home page's sparklines are a
+  hand-rolled 12-line SVG precisely so the first paint does not wait on a
+  charting library.
+* Match detail prefetches on row hover with `staleTime: Infinity` — a parsed
+  match is immutable by construction.
+
+### Frontend
+Nav now carries the three players (they *are* the app). New `/matches`
+archive browser with keyset pagination, and `/compare`. Identity colours
+assigned by **sorted account id**, not array position, so a fourth tracked
+player cannot recolour the other three. Placement is graded identically
+everywhere via `lib/players.ts`; form strips, map-tile thumbnails and heroes.
+Match page gained a kill map drawn from the stored positions — **no y flip**,
+`imageScale` applied. Replay gained the match strip (alive-count curve, kill
+ticks, phase boundaries), an inventory panel, knocks/revives in the feed, and
+`?t=`/`?follow=` deep links.
+
+**The inventory panel folds deltas from zero**, which BUILD-SPEC §5.3 warns
+against. The warning is about resolving *every* player *every frame*; this
+resolves one player at 10 Hz, memoised per whole second, over a few thousand
+deltas. The bundle ships the delta track but **not** the parser's keyframes,
+so there is nothing to rewind to — adding them is the alternative if this ever
+gets hot.
+
+### State
+`uv run pytest -q` — **783 passed, 1 skipped**. `ruff`, `tsc`, `oxlint` clean.
+`mypy` still not a gate (see CLAUDE.md). Parser is **v3**; all 65 matches
+reparsed. Migration head is **0003**.
