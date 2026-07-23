@@ -888,3 +888,44 @@ Worth internalising: this project's rule is "measure, do not assume", and
 `git status` being quiet was taken as "nothing to commit" for several
 sessions. `git ls-files <path>` answers the actual question — whether a file
 is tracked — and `git check-ignore -v <path>` names the offending line.
+
+---
+
+## 20. Full git audit, 2026-07-23
+
+Prompted by §19's discovery that the parser package had never been committed.
+Verified against a **fresh clone of the pushed repository**, not by reading
+`.gitignore`:
+
+| check | result |
+|---|---|
+| files in the working tree absent from the clone | **`.env` only** (correct — it holds the API key) |
+| files in the repo but not locally | none |
+| backend internal imports resolving to a file in the clone | 170/170 across 69 files |
+| frontend relative imports resolving | 103/103 across 34 files |
+| `npm run typecheck` / `oxlint` / `vitest` / `vite build` in the clone | clean, **55 tests pass** |
+| `uv sync && pytest` in the clone | **160 passed, 48 skipped, 0 failed** |
+| `pubgd --help`, `alembic heads` | work; all three migrations present |
+
+The 48 skips are the intended contract — corpus and tile tests skip cleanly
+when `data/` and `assets/` are absent, so a source-only checkout is green.
+(The working tree reports 783 because the corpus parametrises many tests
+across 65 matches.)
+
+### Two more dead `.gitignore` rules
+
+`!data/.gitkeep` and `!assets/.gitkeep` could never fire: **git does not
+descend into an excluded directory**, so a negation beneath a bare `data/` or
+`assets/` is unreachable. Both are now `data/*` / `assets/*`, which excludes
+the *contents* while leaving the directory visible for the negation, and the
+placeholders are committed so a clone gets the directories.
+
+Nothing depended on this — `storage/filesystem.py` does
+`mkdir(parents=True, exist_ok=True)` — but a `.gitignore` that states an
+intent git cannot honour is exactly the kind of quiet wrongness that hid the
+parser package for weeks.
+
+**The lesson worth keeping:** a quiet `git status` is not evidence. Use
+`git ls-files <path>` to ask whether a file is tracked and
+`git check-ignore -v <path>` to find the rule to blame — and when it matters,
+clone the remote and run it.

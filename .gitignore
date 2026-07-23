@@ -47,7 +47,11 @@ frontend/.vite/
 *.tsbuildinfo
 
 # --- Data (never commit telemetry or map assets) ---
-data/
+# `data/*` not `data/`: git never descends into an excluded **directory**, so a
+# `!data/.gitkeep` under a bare `data/` can never match and the placeholder is
+# silently dropped from every clone. Excluding the *contents* leaves the
+# directory visible for the negation to re-include.
+data/*
 !data/.gitkeep
 # **Anchored.** An unanchored `telemetry/` matches a directory of that name at
 # ANY depth, and it silently swallowed `backend/pubg_dashboard/telemetry/` —
@@ -59,7 +63,7 @@ data/
 *.telemetry.json.gz
 # Build output of scripts/fetch_map_assets.py — ~21 MB of webp tiles per two
 # maps, plus ~175 MB of cached source PNGs. Regenerate, never commit.
-assets/
+assets/*
 !assets/.gitkeep
 
 # --- Local infra state ---
