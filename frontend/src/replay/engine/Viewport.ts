@@ -13,6 +13,7 @@ export class Viewport {
   private lastX = 0
   private lastY = 0
   private following: number | null = null
+  private pendingFit: number | null = null
 
   scale = 1
   minScale = 0.4
@@ -41,6 +42,7 @@ export class Viewport {
   }
 
   destroy(): void {
+    if (this.pendingFit !== null) cancelAnimationFrame(this.pendingFit)
     this.canvas.removeEventListener('pointerdown', this.down)
     this.canvas.removeEventListener('pointermove', this.move)
     window.removeEventListener('pointerup', this.up)
@@ -51,6 +53,22 @@ export class Viewport {
   fit(): void {
     const w = this.canvas.clientWidth || this.canvas.width
     const h = this.canvas.clientHeight || this.canvas.height
+
+    // Pixi's `resizeTo` defers the first resize to an animation frame, so the
+    // canvas can still be zero-sized when the renderer is constructed. Scaling
+    // the world by 0 collapses every layer to a single point and produces a
+    // perfectly black canvas while the clock, the store and the DOM panels all
+    // keep working — so retry rather than "succeed" at rendering nothing.
+    if (!(w > 0) || !(h > 0)) {
+      if (this.pendingFit === null) {
+        this.pendingFit = requestAnimationFrame(() => {
+          this.pendingFit = null
+          this.fit()
+        })
+      }
+      return
+    }
+
     this.scale = Math.min(w, h) / this.worldPx
     this.minScale = this.scale * 0.85
     this.world.scale.set(this.scale)

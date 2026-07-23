@@ -72,15 +72,60 @@
   background: var(--bg-inset); border-radius: 10px; padding: 1px 7px; font-size: 11px;
 }
 
+/* --- Loadout overlay ------------------------------------------------------ */
+/* On the canvas, beside the player it describes. It used to be a rail panel,
+   which pushed the team list down the moment you selected anyone — so the one
+   action that makes you want to switch players was also the one that made
+   switching players hard. */
+.replay .loadout {
+  position: absolute; left: 14px; top: 52px; z-index: 3;
+  width: 250px; max-height: calc(100% - 160px); overflow: auto;
+  background: rgba(14,17,22,.94); border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg); padding: 10px 12px;
+  backdrop-filter: blur(6px);
+}
+.replay .loadout-head {
+  display: flex; align-items: center; gap: 7px; margin-bottom: 8px;
+  padding-bottom: 7px; border-bottom: 1px solid var(--border);
+}
+.replay .dot-team { width: 9px; height: 9px; border-radius: 2px; flex: 0 0 9px; }
+.replay .loadout-close {
+  min-width: 0; padding: 1px 6px; font-size: 11px;
+  background: none; border: 1px solid transparent; color: var(--text-faint);
+}
+.replay .loadout-close:hover { color: var(--bad); border-color: var(--border-strong); }
+
+/* --- Render failure ------------------------------------------------------- */
+/* A renderer that fails silently is a black rectangle nobody can debug, which
+   is exactly how this page shipped. */
+.replay .render-error {
+  position: absolute; left: 50%; top: 40%; z-index: 4; transform: translate(-50%, -50%);
+  display: grid; gap: 6px; justify-items: center; text-align: center;
+  max-width: 460px; padding: 14px 18px;
+  background: rgba(14,17,22,.95); border: 1px solid var(--bad);
+  border-radius: var(--radius-lg);
+}
+
 /* --- Rail ----------------------------------------------------------------- */
+/* Two panels only: the feed takes what it needs up to a share of the height,
+   the team list takes the rest. Both scroll independently, so neither can
+   displace the other. */
 .replay .rail {
   width: 300px; flex: 0 0 300px;
   border-left: 1px solid var(--border); background: var(--bg);
   display: flex; flex-direction: column; min-height: 0;
 }
-.replay .panel { padding: 12px 14px; border-bottom: 1px solid var(--border); min-height: 0; }
-.replay .panel.scroll { overflow: auto; flex: 1; }
-.replay .panel h3 { margin-bottom: 8px; }
+.replay .panel {
+  padding: 12px 14px; border-bottom: 1px solid var(--border);
+  min-height: 0; display: flex; flex-direction: column;
+}
+.replay .panel h3 { margin-bottom: 8px; flex: 0 0 auto; }
+.replay .panel .scroll { overflow-y: auto; min-height: 0; }
+
+.replay .panel-feed { flex: 0 1 auto; max-height: 44%; }
+.replay .panel-feed .feed { flex: 1 1 auto; }
+.replay .panel-teams { flex: 1 1 0; border-bottom: none; }
+.replay .panel-teams .team-list { flex: 1 1 auto; }
 
 /* The kill feed. Note this is a *different* `.feed-row` from the match feed's
    on the home page — see the file header for what that cost. */

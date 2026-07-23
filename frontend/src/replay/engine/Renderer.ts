@@ -26,6 +26,9 @@ interface Options {
   imageScale: number
   maxZoom: number
   tracked: Set<string>
+  /** Surfaced in the UI. A renderer that fails silently is a black rectangle
+   *  nobody can debug — which is exactly how this page shipped. */
+  onError?: (message: string) => void
 }
 
 export class Renderer {
@@ -101,9 +104,17 @@ export class Renderer {
       g.moveTo(0, i * step).lineTo(this.worldPx, i * step)
     }
     g.stroke({ width: 1, color: 0xffffff, alpha: 0.07 })
-    // Static for the life of the match, so rasterise it once.
     this.gridLayer.addChild(g)
-    this.gridLayer.cacheAsTexture(true)
+
+    // **Deliberately NOT cached to a texture.** `cacheAsTexture(true)` used to
+    // be here, and it rasterises the container at its own bounds — which are
+    // the whole world, 8192x8192. That is a 268 MB RGBA render texture at
+    // devicePixelRatio 1 and 16384x16384 (1.07 GB, past the maximum texture
+    // dimension on most GPUs) at dpr 2, to cache **fourteen straight lines**.
+    // When the allocation fails Pixi throws inside its own render pass, which
+    // runs as a separate lower-priority ticker listener — so our `drawFrame`
+    // kept publishing to the store and the DOM panels kept updating while the
+    // canvas stayed completely black. Fourteen lines cost nothing to redraw.
   }
 
   private buildDots(): void {
@@ -129,6 +140,17 @@ export class Renderer {
 
   /** Swap the tile pyramid level to match the current zoom. */
   private async onZoom(scale: number): Promise<void> {
+    // A non-finite scale or maxZoom used to poison this silently: `wanted`
+    // became NaN, the tile loops never ran, and the `tileLevel !== wanted`
+    // check below is always true for NaN, so it returned having drawn
+    // nothing and left `tileLevel` as NaN forever after.
+    if (!Number.isFinite(scale) || !Number.isFinite(this.opts.maxZoom)) {
+      this.opts.onError?.(
+        `replay geometry is not a number (scale=${scale}, maxZoom=${this.opts.maxZoom})`,
+      )
+      return
+    }
+
     const wanted = Math.max(
       0,
       Math.min(this.opts.maxZoom, Math.ceil(Math.log2(Math.max(scale, 0.001) * 2))),
@@ -143,16 +165,27 @@ export class Renderer {
       for (let x = 0; x < n; x++)
         urls.push(`${this.opts.tileBase}/${this.opts.mapName}/${wanted}/${x}_${y}.webp`)
 
-    const textures = await Promise.all(
-      urls.map((u) => Assets.load<Texture>(u).catch(() => Texture.EMPTY)),
-    )
+    // `allSettled`, and failures are reported. This was
+    // `.catch(() => Texture.EMPTY)`, which turned any loading problem into a
+    // blank map with no error anywhere — indistinguishable from a map that
+    // rendered correctly onto a dark background.
+    const results = await Promise.allSettled(urls.map((u) => Assets.load<Texture>(u)))
     if (this.destroyed || this.tileLevel !== wanted) return
+
+    const failed = results.filter((r) => r.status === 'rejected').length
+    if (failed > 0) {
+      this.opts.onError?.(
+        `${failed} of ${urls.length} map tiles failed to load for ${this.opts.mapName} ` +
+          `at zoom ${wanted} — run scripts/fetch_map_assets.py`,
+      )
+    }
 
     this.mapLayer.removeChildren().forEach((c) => c.destroy())
     let i = 0
     for (let y = 0; y < n; y++) {
       for (let x = 0; x < n; x++) {
-        const s = new Sprite(textures[i++])
+        const result = results[i++]!
+        const s = new Sprite(result.status === 'fulfilled' ? result.value : Texture.EMPTY)
         s.position.set(x * size, y * size)
         s.width = size
         s.height = size

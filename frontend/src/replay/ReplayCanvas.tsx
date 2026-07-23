@@ -18,6 +18,7 @@ export function ReplayCanvas({
   maxZoom,
   tracked,
   onReady,
+  onError,
 }: {
   bundle: ReplayBundle
   sourcePx: number
@@ -25,6 +26,7 @@ export function ReplayCanvas({
   maxZoom: number
   tracked: Set<string>
   onReady: (r: Renderer) => void
+  onError?: (message: string) => void
 }) {
   const holder = useRef<HTMLDivElement>(null)
 
@@ -62,18 +64,24 @@ export function ReplayCanvas({
         imageScale,
         maxZoom,
         tracked,
+        onError,
       })
       renderer.start()
       renderer.drawEvents()
       onReady(renderer)
-    })()
+    })().catch((e: unknown) => {
+      // Without this the whole init is a floating promise: any failure — WebGPU
+      // refusing to initialise, a bad bundle — rejected into nothing, `onReady`
+      // never fired, and the page sat on a black rectangle with no explanation.
+      if (!cancelled) onError?.(e instanceof Error ? e.message : String(e))
+    })
 
     return () => {
       cancelled = true
       renderer?.destroy()
       app?.destroy(true, { children: true, texture: true })
     }
-  }, [bundle, sourcePx, imageScale, maxZoom, tracked, onReady])
+  }, [bundle, sourcePx, imageScale, maxZoom, tracked, onReady, onError])
 
   return <div ref={holder} className="canvas-holder" />
 }

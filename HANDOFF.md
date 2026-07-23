@@ -640,3 +640,61 @@ Worth noting the first attempt at this **silently produced a stale `dist/`**:
 build and left the previously-built assets in place, which still contained
 the unscoped CSS. Check that `build` actually reached the vite step before
 believing a fix shipped.
+
+---
+
+## 16. The replay canvas rendered nothing — fixed 2026-07-23
+
+Reported as "the match replay has no map rendering". The canvas was
+**completely black** — no map, no player dots, no zone circles — while the
+kill feed and team list in the rail worked normally.
+
+That combination is the diagnosis. The kill feed reads `nowMs` from the
+external store, which is only written by `Renderer.drawFrame` → `publish()`.
+A populated feed proves the clock was running, the frame loop was completing
+and the renderer had constructed successfully. So the failure was not in the
+replay logic at all; it was that Pixi drew nothing.
+
+**Cause: `gridLayer.cacheAsTexture(true)`.** It rasterises a container at its
+own bounds, and the grid spans the whole world — 8192x8192. That is a 268 MB
+RGBA render texture at devicePixelRatio 1, and 16384x16384 (1.07 GB, past the
+maximum texture dimension on most GPUs) at dpr 2 — to cache **fourteen
+straight lines**. Pixi's own render runs as a separate, lower-priority ticker
+listener, so when the allocation failed it threw inside Pixi's render pass
+while our `drawFrame` listener carried on publishing to the store. Hence:
+live panels, dead canvas. The cache is gone; fourteen lines cost nothing to
+redraw each frame.
+
+### Three silent-failure modes closed with it
+
+* **`Assets.load(...).catch(() => Texture.EMPTY)`** turned any tile-loading
+  problem into a blank map with no error anywhere — a missing map is not
+  visually distinguishable from a dark one. Now `Promise.allSettled`, and
+  failures are reported to the UI.
+* **`Viewport.fit()` could scale the world by 0.** Pixi defers its first
+  `resizeTo` resize to an animation frame, so the canvas can still be
+  zero-sized when the renderer is built; `min(0,0)/8192` is 0, which collapses
+  every layer to a point and renders a perfectly black canvas while everything
+  else keeps working. It now defers and retries.
+  `src/replay/engine/Viewport.test.ts` pins this — 4 of its 7 tests fail when
+  the guard is removed.
+* **A non-finite `scale` or `maxZoom` poisoned `onZoom` permanently.** `wanted`
+  became NaN, the tile loops never ran, and `tileLevel !== wanted` is always
+  true for NaN, so it returned having drawn nothing and left `tileLevel` NaN
+  forever after.
+
+The renderer now takes an `onError` callback and the page shows a real message
+over the canvas instead of a black rectangle. The Pixi init promise is also no
+longer floating — a WebGPU failure used to reject into nothing.
+
+## The replay rail was rebuilt around the loadout
+
+Selecting a player to see their loadout inserted a third panel between the
+kill feed and the team list, pushing the list down — so the one action that
+makes you want to switch players was also the one that made switching hard.
+
+The loadout is now a card **on the canvas**, next to the player it describes,
+with the followed player's name and a close button. The rail holds two panels:
+the kill feed (capped at 44% of the height) and the team list (takes the
+rest). Both scroll independently and neither can displace the other, so the
+team list never moves.

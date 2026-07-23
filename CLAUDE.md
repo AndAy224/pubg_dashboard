@@ -194,6 +194,15 @@ development Vite proxies instead, so a missing `dist/` is normal.
 object, Pixi is mounted imperatively, and DOM panels subscribe to an external
 store that ticks at 10 Hz. `ReplayCanvas` is the only React↔Pixi boundary.
 
+That boundary also shapes debugging: Pixi's render is a *separate, lower
+priority* ticker listener, so it can throw on every frame while `drawFrame`
+keeps publishing. **Live rail panels with a black canvas means Pixi is
+failing, not the replay logic.** Two traps found that way — never
+`cacheAsTexture` a container whose bounds are the whole world (8192², a 268 MB
+texture, 1.07 GB at dpr 2), and never let `Viewport.fit` scale by 0 when the
+canvas has not been laid out yet, because rendering nothing looks exactly like
+a broken renderer.
+
 Version pins in BUILD-SPEC §5.5 are deliberate — TypeScript ~6.0.2 (not 7.x),
 react-table 8 (not the v9 beta), no `@pixi/react`, no `pixi-viewport`.
 TypeScript 6's `erasableSyntaxOnly` rejects constructor parameter properties.

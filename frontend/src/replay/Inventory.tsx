@@ -126,16 +126,13 @@ export function InventoryPanel({
     return resolve(bundle, playerIndex, (second * 1000) / bundle.tickMs)
   }, [bundle, playerIndex, second])
 
+  // Body only — the caller owns the heading and the surrounding card, because
+  // this renders inside the loadout overlay on the canvas rather than as a
+  // rail panel of its own.
   if (playerIndex === null) {
-    return (
-      <div className="panel">
-        <h3>Inventory</h3>
-        <div className="faint small">select a player to follow</div>
-      </div>
-    )
+    return <div className="faint small">select a player to follow</div>
   }
 
-  const player = bundle.players[playerIndex]
   const heals = state
     ? [...state.loose.entries()].filter(([k]) => /heal|med|bandage|boost|painkiller|drink|syringe|adrenaline/i.test(k))
     : []
@@ -144,8 +141,7 @@ export function InventoryPanel({
     : []
 
   return (
-    <div className="panel">
-      <h3>Inventory · {player?.n}</h3>
+    <>
       {!state || (state.slots.size === 0 && state.loose.size === 0) ? (
         <div className="faint small">nothing carried yet</div>
       ) : (
@@ -188,6 +184,6 @@ export function InventoryPanel({
           )}
         </div>
       )}
-    </div>
+    </>
   )
 }

@@ -23,6 +23,7 @@ export function Replay() {
   const rendererRef = useRef<Renderer | null>(null)
   const [ready, setReady] = useState(false)
   const [follow, setFollow] = useState<number | null>(null)
+  const [renderError, setRenderError] = useState<string | null>(null)
 
   const match = useQuery({
     queryKey: ['match', matchId],
@@ -133,8 +134,29 @@ export function Replay() {
           maxZoom={info.maxZoom}
           tracked={tracked}
           onReady={onReady}
+          onError={setRenderError}
         />
         <TopBar match={match.data} bundle={bundle} />
+
+        {/* The loadout lives on the canvas, beside the player it describes,
+            rather than in the rail. In the rail it pushed the team list down
+            the moment you selected anyone — so the one action that makes you
+            want to switch players was also the one that made switching hard. */}
+        {ready && follow !== null && (
+          <LoadoutOverlay
+            bundle={bundle}
+            playerIndex={follow}
+            onClose={() => onFollow(null)}
+          />
+        )}
+
+        {renderError && (
+          <div className="render-error">
+            <strong>The map could not be drawn.</strong>
+            <span className="faint small">{renderError}</span>
+          </div>
+        )}
+
         {ready && (
           <Controls
             renderer={rendererRef}
@@ -145,7 +167,6 @@ export function Replay() {
       </div>
       <aside className="rail">
         {ready && <KillFeed bundle={bundle} renderer={rendererRef} />}
-        {ready && <InventoryFromStore bundle={bundle} playerIndex={follow} />}
         <TeamList bundle={bundle} tracked={tracked} follow={follow} onFollow={onFollow} />
       </aside>
     </div>
@@ -174,17 +195,37 @@ function TopBar({ match, bundle }: { match?: MatchDetail; bundle: ReplayBundle }
   )
 }
 
-/** Reads the playhead from the store so the inventory does not re-render the
- *  whole page at 10 Hz. */
-function InventoryFromStore({
+/**
+ * The followed player's loadout, as a card on the canvas.
+ *
+ * Subscribes to the store itself so the playhead does not re-render the whole
+ * page at 10 Hz — the same reason every other panel does.
+ */
+function LoadoutOverlay({
   bundle,
   playerIndex,
+  onClose,
 }: {
   bundle: ReplayBundle
-  playerIndex: number | null
+  playerIndex: number
+  onClose: () => void
 }) {
   const s = useReplayState()
-  return <InventoryPanel bundle={bundle} playerIndex={playerIndex} nowMs={s.nowMs} />
+  const player = bundle.players[playerIndex]
+  return (
+    <div className="loadout">
+      <div className="loadout-head">
+        <span className="dot-team" style={{ background: hex(teamColour(player?.t ?? 0)) }} />
+        <strong>{player?.n}</strong>
+        <span className="faint small">team {player?.t}</span>
+        <div className="spacer" />
+        <button className="loadout-close" onClick={onClose} title="stop following (Esc)">
+          ✕
+        </button>
+      </div>
+      <InventoryPanel bundle={bundle} playerIndex={playerIndex} nowMs={s.nowMs} />
+    </div>
+  )
 }
 
 function Controls({
@@ -282,9 +323,9 @@ function KillFeed({
     .reverse()
 
   return (
-    <div className="panel">
+    <div className="panel panel-feed">
       <h3>Kill feed</h3>
-      <div className="feed">
+      <div className="feed scroll">
         {rows.map((e, i) => {
           const victim = bundle.players[e.v as number]
           const killer = (e.p as number) === NULL_PLAYER ? null : bundle.players[e.p as number]
@@ -344,8 +385,12 @@ function TeamList({
   const click = (i: number) => onFollow(follow === i ? null : i)
 
   return (
-    <div className="panel scroll">
+    <div className="panel panel-teams">
       <h3>Teams ({teams.length})</h3>
+      {/* Its own scroll container, so the list keeps its position when the
+          loadout appears — the loadout is on the canvas now and nothing above
+          this can grow. */}
+      <div className="team-list scroll">
       {teams.map(([teamId, members]) => (
         <div key={teamId} className="team">
           <div className="team-head">
@@ -365,6 +410,7 @@ function TeamList({
           ))}
         </div>
       ))}
+      </div>
     </div>
   )
 }
