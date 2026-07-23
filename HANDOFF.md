@@ -593,3 +593,50 @@ regression is worth nothing, so this was checked rather than assumed.
 One unrelated inconsistency surfaced while writing them: `duration()`
 zero-padded seconds but not minutes, so "1h 0m" misaligned against "1h 30m"
 in the `tabular-nums` columns. Fixed.
+
+---
+
+## 15. Lazy-route CSS leaked globally — fixed 2026-07-23
+
+Reported as: the recent-matches list is fine on first load, but after
+navigating away and back the formatting collides and is unreadable.
+
+`.feed-row` was declared in **two** stylesheets — `components/MatchFeed.css`
+(the home page's match rows, `display: flex`) and `pages/Replay.css` (the
+replay kill feed, `display: grid; grid-template-columns: 42px 1fr auto 1fr`).
+
+Vite injects a lazily-loaded chunk's stylesheet when the chunk first loads and
+**never removes it**. `Replay.css` ships in the lazy Replay chunk, so it does
+not exist on a fresh load — the home page is correct. Open a replay and the
+sheet is injected permanently; navigate back and the match feed's five-column
+rows are now being laid out by a four-column grid meant for something else.
+
+That load-order dependence is why it looked intermittent and why a fresh
+reload always "fixed" it.
+
+**Fix:** every selector in `pages/Replay.css` is scoped under `.replay`, the
+page root. `.replay-error` is the one exception — it renders *instead of*
+`.replay`, never inside it — and is declared as such in the test.
+
+`src/styles/css-scope.test.ts` enforces two rules and both were verified to
+fail when the offending declaration is restored:
+
+1. every selector in a `pages/*.css` sheet sits under that page's root class,
+   and a new page stylesheet must opt into a declared scope rather than
+   silently becoming global;
+2. no class is declared globally by two stylesheets at all.
+
+### TypeScript projects split three ways
+
+The scope test reads stylesheets off disk, which needs `node` types — and
+`tsconfig.app.json` deliberately has none, so that app code cannot reference
+`process` or `node:fs` and crash in a browser. Rather than weaken that,
+tests got their own project (`tsconfig.test.json`) with the Node types, and
+`tsconfig.app.json` now excludes `src/**/*.test.ts`. Verified both ways: a
+`process.env` added to `src/lib/format.ts` still fails the build.
+
+Worth noting the first attempt at this **silently produced a stale `dist/`**:
+`npm run build` is `tsc -b && vite build`, so the type error aborted the
+build and left the previously-built assets in place, which still contained
+the unscoped CSS. Check that `build` actually reached the vite step before
+believing a fix shipped.

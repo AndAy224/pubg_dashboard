@@ -77,6 +77,25 @@ bundles from a running API and **skips cleanly when it is absent**, mirroring
 the backend's convention — so a source-only checkout stays green. Point it
 elsewhere with `PUBGD_API_BASE`.
 
+Three TypeScript projects, and the split is load-bearing: `tsconfig.app.json`
+is what ships and deliberately has **no `node` types**, so app code cannot
+reference `process` or `node:fs` and crash in a browser;
+`tsconfig.test.json` adds them for tests; `tsconfig.node.json` covers the
+config files. Put a `process.env` in `src/` and the build fails, by design.
+
+### CSS from a lazy route is global once that route loads
+
+Vite injects a lazy chunk's stylesheet on first load and **never removes it**,
+so `pages/*.css` is global from the moment someone visits that page — on every
+other page, for the rest of the session. `pages/Replay.css` is therefore
+scoped entirely under `.replay`, and `src/styles/css-scope.test.ts` enforces
+that plus "no class is declared globally by two stylesheets".
+
+This is not hypothetical: `.feed-row` was declared in both `Replay.css` and
+`MatchFeed.css`, and the replay's four-column grid landed on the home page's
+five-column match rows. A fresh load looked perfect — the collision only
+appeared after opening a replay and navigating back.
+
 `ruff` and both frontend checks pass. **`mypy` does not** — it is configured
 `strict = true` but the codebase has never satisfied it (currently 18 errors,
 mostly `type-arg`, `import-untyped` from boto3, and SQLAlchemy statement

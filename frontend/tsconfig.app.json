@@ -20,5 +20,10 @@
     "composite": true,
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo"
   },
-  "include": ["src"]
+  // Tests are excluded on purpose. This project is what ships to the browser,
+  // so it deliberately has no `node` types — that is what stops app code from
+  // quietly referencing `process` or `node:fs`, which would crash at runtime.
+  // Test files get those types from tsconfig.test.json instead.
+  "include": ["src"],
+  "exclude": ["src/**/*.test.ts"]
 }
