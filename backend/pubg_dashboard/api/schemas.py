@@ -448,3 +448,64 @@ class Overview(ApiModel):
     matches: list[MatchFeedRow]
     health: Health
     session: SessionSummary | None
+
+
+# ---------------------------------------------------------------------------
+# strategy
+# ---------------------------------------------------------------------------
+class StrategyMetrics(ApiModel):
+    """Telemetry-derived behavior for one player in one match.
+
+    Every field is nullable: each has a real "not measurable" case (no
+    landing, no teammates, no fights, no circle while alive) that must stay
+    distinguishable from zero.
+    """
+
+    blue_s: float | None
+    blue_damage: float | None
+    rotate_lag_s: float | None
+    teammate_dist_avg_cm: float | None
+    teammate_near_pct: float | None
+    hot_drop_n: int | None
+    first_engage_s: float | None
+    dmg_dealt_early: float | None
+    dmg_taken_early: float | None
+    first_weapon_s: float | None
+    early_pickups_n: int | None
+
+
+class StrategyMatchRow(StrategyMetrics):
+    """One official match's metrics + enough context to contrast by placement."""
+
+    match_id: str
+    played_at: dt.datetime
+    map_name: str
+    game_mode: str
+    team_size: int | None
+    win_place: int
+    time_survived: float
+    kills: int
+    damage_dealt: float
+    ride_distance: float
+    walk_distance: float
+
+
+class SquadPlayerCohesion(StrategyMetrics):
+    account_id: str
+    name: str
+
+
+class SquadMatchRow(ApiModel):
+    """A match at least two tracked players played on the same team."""
+
+    match_id: str
+    played_at: dt.datetime
+    map_name: str
+    game_mode: str
+    win_place: int
+    players: list[SquadPlayerCohesion]
+
+
+class MatchStrategyRow(StrategyMetrics):
+    account_id: str
+    name: str

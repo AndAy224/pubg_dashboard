@@ -239,6 +239,7 @@ class FrameIndex:
     __slots__ = (
         "_by_account",
         "_death_ms",
+        "_landing",
         "_t0_ms",
         "_vehicle",
         "_world_size",
@@ -252,6 +253,10 @@ class FrameIndex:
         self._by_account: dict[str, list[Sample]] = {}
         #: Each account's **final** death, for resolving the alive/DBNO bits.
         self._death_ms: dict[str, int] = {}
+        #: Each account's **first** parachute landing — the drop. First wins,
+        #: the opposite of the death rule: a flare-gun redeploy lands again
+        #: mid-match, and that second landing is not where the player dropped.
+        self._landing: dict[str, tuple[int, float, float]] = {}
         #: What each account is currently riding, for `FLAG_DRIVING`. Measured
         #: over the corpus this is complete: every one of the 7,635 in-vehicle
         #: position samples had a preceding ride event, none unknown.
@@ -280,6 +285,13 @@ class FrameIndex:
             # match they are still playing. Same rule `combat` uses.
             if account and t_ms >= self._death_ms.get(account, -1):
                 self._death_ms[account] = t_ms
+
+        if kind == norm(E.PARACHUTE_LANDING):
+            lander = E.unwrap_character(event.get("character"))
+            account = str((lander or {}).get("accountId") or "")
+            if account and account not in self._landing:
+                x, y, _z = E.location(lander)
+                self._landing[account] = (t_ms, x, y)
 
         # Update the ride index **before** building this event's own sample, so
         # the boarding sample already knows the vehicle and the dismount sample
@@ -343,6 +355,11 @@ class FrameIndex:
     def death_ms(self, account: str) -> int | None:
         """The account's final death, or None if it survived."""
         return self._death_ms.get(account)
+
+    def landing(self, account: str) -> tuple[int, float, float] | None:
+        """The account's first parachute landing as `(t_ms, x_cm, y_cm)`,
+        or None if it never landed (left during the flight)."""
+        return self._landing.get(account)
 
     def _resolve(self, account: str, samples: list[Sample]) -> list[Sample]:
         """Settle the alive/DBNO bits against the account's final death.

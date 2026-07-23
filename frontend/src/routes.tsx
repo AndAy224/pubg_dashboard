@@ -16,6 +16,10 @@ const Replay = lazy(() => import('./pages/Replay').then((m) => ({ default: m.Rep
 const Player = lazy(() => import('./pages/Player').then((m) => ({ default: m.Player })))
 const Compare = lazy(() => import('./pages/Compare').then((m) => ({ default: m.Compare })))
 
+// No heavy dependency — its charts are hand-rolled SVG — but lazy anyway: the
+// analysis page is a destination, not part of anyone's first paint.
+const Strategy = lazy(() => import('./pages/Strategy').then((m) => ({ default: m.Strategy })))
+
 function Loading() {
   return <div className="empty">loading…</div>
 }
@@ -35,6 +39,7 @@ export const routes: RouteObject[] = [
       { path: 'matches/:matchId', element: <Match /> },
       { path: 'heatmaps', element: <Heatmaps /> },
       { path: 'compare', element: lazyRoute(<Compare />) },
+      { path: 'strategy', element: lazyRoute(<Strategy />) },
       { path: 'settings', element: <Settings /> },
       { path: '*', element: <div className="empty">no such page</div> },
     ],

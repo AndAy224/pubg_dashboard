@@ -1191,3 +1191,54 @@ the name-probing path raises `PlayerNotFound`. Both are covered.
 `api/client.ts::post` threw `r.statusText` while `get` parsed `detail` out of
 the body. Unfixed, the entire explanation above would have reached the user as
 the two words **"Not Found"**. Both now share one `errorFrom` helper.
+
+## 23. Strategy insights — added 2026-07-23
+
+**What**: a per-participant `strategy_metrics` table (parser v7), a `/strategy`
+page contrasting each tracked player's best-placed vs worst-placed official
+matches per metric, and a "Strategy" panel on the match page. Metrics: time in
+blue (`FLAG_BLUE_ZONE` dwell, gaps clamped at 15 s), blue damage taken (new
+per-victim accumulator in `combat.py` — attacker-less events matched on
+lowercased `Damage_BlueZone`), rotation lag (white-circle announcement →
+first sample inside, clock starting at `max(announcement, landing)`),
+teammate distance/near-% (nearest-in-time pairing, ±15 s), hot-drop count,
+first engagement, early damage dealt/taken, landing→first weapon, early
+pickups. All 65 matches reparsed; all populated.
+
+Facts that shaped it, verified against the archive:
+
+- **`participants.landed_at_s` had existed since migration 0002 and was never
+  written**, and `landing_x/y` came from the *first frame sample*, which can
+  sit on the aircraft's path. Both now come from `LogParachuteLanding`
+  (first landing wins — flare redeploys land twice; the death rule is the
+  opposite, latest wins).
+- **The smallest telemetry file in the corpus is a training-range match with a
+  two-person roster.** Any corpus test that picks "the smallest file" and then
+  asserts percentages must filter to `matchType == "official"` first —
+  `tests/test_telemetry_strategy.py::_corpus` does.
+- **Teammate pairing must select the nearest-in-time sample, not whichever
+  bracketing sample is spatially closer** — the latter systematically
+  understates squad spread (caught by a synthetic test before it shipped).
+- **Raw blue-zone seconds are confounded by survival**: placing well means
+  living longer, which means more chances to touch the blue. The page shows
+  blue time as a share of time alive; the raw seconds stay in the table.
+- Distributions after the full reparse (3,243 human rows): rotation lag p25
+  5.4 s / median 54 s / p90 294 s; median blue time 0 s; median first weapon
+  8.9 s; median teammate-near 97%.
+
+Analysis is deliberately server-light: the API (`api/routers/strategy.py`)
+returns joined rows; the best-vs-worst contrast (ties at the boundary
+included, per-side n from non-null values only) is a pure function in
+`frontend/src/lib/strategy.ts` with hermetic vitest coverage. Null means "not
+measurable" (no landing, no teammates, no fights) and is never rendered as 0.
+
+`strategy_metrics` is delete-then-insert like `kill_events` (absolute values,
+no ledger needed). Migration 0005. The scatter strips are hand-rolled SVG, so
+the page does not load Recharts.
+
+The page defaults to a **combined** view: every tracked player's rows pooled
+(a match two of them played counts once per player — stated in the note),
+scatter dots coloured per player so "who drives this pattern" stays visible,
+and the weapons table merged by `mergeWeapons` in `lib/strategy.ts` (kills
+sum, longest is a max, average range weighted by kills). Purely client-side —
+no new endpoint.

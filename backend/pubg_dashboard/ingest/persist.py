@@ -24,7 +24,14 @@ from sqlalchemy import delete, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from pubg_dashboard.db.models import HeatmapBin, KillEvent, Match, Participant, utcnow
+from pubg_dashboard.db.models import (
+    HeatmapBin,
+    KillEvent,
+    Match,
+    Participant,
+    StrategyMetric,
+    utcnow,
+)
 from pubg_dashboard.telemetry.parse import ParseResult
 
 log = structlog.get_logger(__name__)
@@ -72,6 +79,13 @@ async def persist_parse_result(
     for chunk in _chunks(result.kill_rows):
         await session.execute(pg_insert(KillEvent).values(chunk))
 
+    # --- strategy_metrics: same shape, same reasoning -----------------------
+    await session.execute(
+        delete(StrategyMetric).where(StrategyMetric.match_id == match_id)
+    )
+    for chunk in _chunks(result.strategy_rows):
+        await session.execute(pg_insert(StrategyMetric).values(chunk))
+
     # --- heatmap bins: reverse the old contribution, then add the new ------
     if previous_ledger:
         # `match_type` is not in the ledger because every bin a single match
@@ -107,6 +121,7 @@ async def persist_parse_result(
                 knocks_human=row["knocks_human"],
                 landing_x=row["landing_x"],
                 landing_y=row["landing_y"],
+                landed_at_s=row["landed_at_s"],
                 death_x=row["death_x"],
                 death_y=row["death_y"],
                 died_at_s=row["died_at_s"],

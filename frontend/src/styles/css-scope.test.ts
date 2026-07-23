@@ -31,6 +31,10 @@ const PAGE_SCOPES: Record<string, { prefix: string; unscoped: string[] }> = {
     // Rendered *instead of* `.replay`, so it cannot live inside it.
     unscoped: ['.replay-error'],
   },
+  'Strategy.css': {
+    prefix: '.strategy',
+    unscoped: [],
+  },
 }
 
 /** Strip comments, then yield every selector in the sheet. */

@@ -70,7 +70,7 @@ async def session() -> AsyncIterator[AsyncSession]:
     await eng.dispose()
 
 
-def _result(*, kills: int = 2, bin_count: int = 5) -> ParseResult:
+def _result(*, kills: int = 2, bin_count: int = 5, strategy: int = 2) -> ParseResult:
     return ParseResult(
         match_id="m1",
         parser_version=1,
@@ -101,6 +101,17 @@ def _result(*, kills: int = 2, bin_count: int = 5) -> ParseResult:
             for i in range(3)
         ],
         participant_updates=[],
+        strategy_rows=[
+            {
+                "match_id": "m1", "account_id": f"account.v{i}",
+                "blue_s": 10.0 * i, "blue_damage": 0.0, "rotate_lag_s": None,
+                "teammate_dist_avg_cm": None, "teammate_near_pct": None,
+                "hot_drop_n": i, "first_engage_s": None,
+                "dmg_dealt_early": 0.0, "dmg_taken_early": 0.0,
+                "first_weapon_s": None, "early_pickups_n": None,
+            }
+            for i in range(strategy)
+        ],
     )
 
 
@@ -177,6 +188,31 @@ async def test_a_shrinking_parse_leaves_no_phantom_kills(session: AsyncSession) 
     )
     await session.commit()
     assert (await _totals(session))[2] == 2
+
+
+async def test_strategy_rows_are_replaced_not_accumulated(session: AsyncSession) -> None:
+    """`strategy_metrics` follows the kill_events shape: absolute per-match
+    values, delete-then-insert, so a reparse can shrink the set."""
+    await persist_parse_result(
+        session, _result(strategy=4), replay_key="r", heat_ledger_key="h",
+        previous_ledger=None, was_parsed=False, map_name=MAP, match_type=MATCH_TYPE, day=DAY,
+    )
+    await session.commit()
+    n = await session.scalar(sql("SELECT count(*) FROM strategy_metrics"))
+    assert n == 4
+
+    ledger = [("movement", "account.a", "squad-fpp", i, 0, 5) for i in range(3)]
+    await persist_parse_result(
+        session, _result(strategy=2), replay_key="r", heat_ledger_key="h",
+        previous_ledger=ledger, was_parsed=True, map_name=MAP, match_type=MATCH_TYPE, day=DAY,
+    )
+    await session.commit()
+    n = await session.scalar(sql("SELECT count(*) FROM strategy_metrics"))
+    assert n == 2
+    blue = await session.scalar(
+        sql("SELECT blue_s FROM strategy_metrics WHERE account_id = 'account.v1'")
+    )
+    assert blue == 10.0
 
 
 async def test_reversal_does_not_leave_dead_zero_rows(session: AsyncSession) -> None:

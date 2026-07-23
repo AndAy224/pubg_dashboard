@@ -12,6 +12,7 @@ const NAV = [
   { to: '/matches', label: 'Matches', icon: '≣' },
   { to: '/heatmaps', label: 'Heatmaps', icon: '▦' },
   { to: '/compare', label: 'Compare', icon: '⇄' },
+  { to: '/strategy', label: 'Strategy', icon: '◎' },
 ]
 
 function IngestBadge() {

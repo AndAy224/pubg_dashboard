@@ -1,0 +1,60 @@
+/* Everything scoped under .strategy: Vite injects a lazy chunk's stylesheet
+ * globally on first visit and never removes it, so an unscoped rule here
+ * would style every other page for the rest of the session. */
+
+.strategy .metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr));
+  gap: 12px;
+}
+
+.strategy .metric h3 {
+  margin-bottom: 10px;
+}
+
+.strategy .bars {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.strategy .bar-row {
+  display: grid;
+  grid-template-columns: 58px 1fr 74px;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.strategy .bar-track {
+  height: 10px;
+  background: var(--bg-inset);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.strategy .bar-fill {
+  height: 100%;
+  border-radius: 3px;
+}
+
+.strategy .bar-value {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.strategy .scatter {
+  display: block;
+  height: 44px;
+  border-top: 1px solid var(--bg-inset);
+  padding-top: 4px;
+}
+
+.strategy .row .dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: 0;
+}

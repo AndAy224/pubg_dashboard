@@ -431,6 +431,63 @@ class KillEvent(Base):
 
 
 # ---------------------------------------------------------------------------
+# Strategy metrics (telemetry-derived, per participant)
+# ---------------------------------------------------------------------------
+class StrategyMetric(Base):
+    """Per-participant behavioral metrics for the strategy page.
+
+    Derived by `telemetry/strategy.py` and written with the same
+    delete-then-insert idempotency as `kill_events` — the values are absolute
+    per-match facts, so no ledger is needed. Rows exist for bots too (the
+    filter is a query-time join on `participants.is_bot`), and every column is
+    nullable because each has a real "not measurable" case: no landing, no
+    teammates, no fights, no circle while alive.
+    """
+
+    __tablename__ = "strategy_metrics"
+
+    match_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("matches.match_id", ondelete="CASCADE"), primary_key=True
+    )
+    # No FK, same reason as participants: bot ids are match-scoped.
+    account_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+
+    # --- zone discipline ----------------------------------------------------
+    # Seconds spent inside the blue (damaging) zone after landing, from
+    # position-sample dwell with clamped gaps.
+    blue_s: Mapped[float | None] = mapped_column(Float)
+    # Damage actually taken from the zone.
+    blue_damage: Mapped[float | None] = mapped_column(Float)
+    # Mean seconds from a white-circle announcement to first being inside it.
+    rotate_lag_s: Mapped[float | None] = mapped_column(Float)
+
+    # --- squad spread (NULL in solos) ---------------------------------------
+    teammate_dist_avg_cm: Mapped[float | None] = mapped_column(Float)
+    # Fraction of samples within 100 m of the nearest living teammate, 0..1.
+    teammate_near_pct: Mapped[float | None] = mapped_column(Float)
+
+    # --- drop ---------------------------------------------------------------
+    # Off-team players landing within 200 m and ±60 s.
+    hot_drop_n: Mapped[int | None] = mapped_column(Integer)
+
+    # --- aggression timing --------------------------------------------------
+    # First attributed hit/knock/kill the player was on either end of.
+    first_engage_s: Mapped[float | None] = mapped_column(Float)
+    dmg_dealt_early: Mapped[float | None] = mapped_column(Float)
+    dmg_taken_early: Mapped[float | None] = mapped_column(Float)
+
+    # --- looting ------------------------------------------------------------
+    # Landing to first weapon equipped in a primary/sidearm slot.
+    first_weapon_s: Mapped[float | None] = mapped_column(Float)
+    early_pickups_n: Mapped[int | None] = mapped_column(Integer)
+
+    __table_args__ = (
+        # The strategy page's scan: one player's rows across matches.
+        Index("ix_strategy_account", "account_id", "match_id"),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Heatmap bins (telemetry-derived, precomputed)
 # ---------------------------------------------------------------------------
 class HeatmapBin(Base):

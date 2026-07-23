@@ -83,6 +83,10 @@ class PlayerCombat:
     knocks_human: int = 0
     revives: int = 0
     damage_dealt: float = 0.0
+    #: Damage *taken* from the blue zone. The only signal for zone discipline
+    #: that costs health rather than time — attacker-less, so it lives outside
+    #: the attributed `hits` path entirely.
+    blue_zone_damage: float = 0.0
     shots_fired: int = 0
     shots_hit: int = 0
     #: The **last** death, not the first — see `CombatTracker.feed`.
@@ -387,6 +391,13 @@ class CombatTracker:
         attacker = event.get("attacker") if isinstance(event.get("attacker"), Mapping) else None
         if attacker is None:
             self.unattributed_damage += amount
+            # Blue-zone ticks are the exception worth keeping per-victim: they
+            # measure zone discipline. Matched on the lowercased category —
+            # the enum is open and casing has moved between patches.
+            if norm(str(event.get("damageTypeCategory") or "")) == _BLUE_ZONE:
+                victim_account = str((event.get("victim") or {}).get("accountId") or "")
+                if victim_account:
+                    self._player(victim_account).blue_zone_damage += amount
             return
         attacker_account = str(attacker.get("accountId") or "")
         victim = event.get("victim") or {}

@@ -57,7 +57,14 @@ BUNDLE_VERSION: Final = 1
 #:     match-start aircraft is a vehicle, so it is set for the entire lobby at
 #:     once, and 43% of in-vehicle samples are aircraft, pickup balloons or a
 #:     mounted mortar. See `frames.DRIVEN_VEHICLES`.
-PARSER_VERSION: Final = 6
+#: 7 — the parse gained `strategy_rows` (the `strategy_metrics` table: zone
+#:     discipline, squad spread, drop, looting and aggression-timing metrics
+#:     per participant — see `strategy`), and the drop columns became
+#:     trustworthy: `participants.landing_x/y` now come from
+#:     `LogParachuteLanding` rather than the first position sample (which can
+#:     sit on the aircraft's path), and `landed_at_s` — a column that had
+#:     existed unwritten since 0002 — is finally populated.
+PARSER_VERSION: Final = 7
 
 DEFAULT_TICK_MS: Final = 100
 FALLBACK_TICK_MS: Final = 1000

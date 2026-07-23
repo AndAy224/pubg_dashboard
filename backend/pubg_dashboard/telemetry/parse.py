@@ -49,6 +49,7 @@ from pubg_dashboard.telemetry.heatmap import (
 from pubg_dashboard.telemetry.inventory import InventoryTracker, PlayerInventory
 from pubg_dashboard.telemetry.maps import world_size
 from pubg_dashboard.telemetry.reader import load, norm, ts_ms
+from pubg_dashboard.telemetry.strategy import compute_strategy
 from pubg_dashboard.telemetry.world import WorldTracker
 
 log = structlog.get_logger(__name__)
@@ -90,6 +91,7 @@ class ParseResult:
     kill_rows: list[dict[str, Any]]
     heatmap_rows: list[dict[str, Any]]
     participant_updates: list[dict[str, Any]]
+    strategy_rows: list[dict[str, Any]]
     unknown_events: dict[str, int] = field(default_factory=dict)
     duration_ms: int = 0
 
@@ -208,7 +210,16 @@ def parse_telemetry(
         heat_ledger=write_heat_ledger(heat.deltas()),
         kill_rows=_kill_rows(match_id, combat),
         heatmap_rows=heat.rows(),
-        participant_updates=_participant_updates(combat, frames, world, roster),
+        participant_updates=_participant_updates(combat, frames, roster, meta.t0_ms),
+        strategy_rows=compute_strategy(
+            match_id=match_id,
+            frames=frames,
+            world=world,
+            combat=combat,
+            inventory=inventory,
+            teams={a: r.team_id for a, r in roster.items()},
+            t0_ms=meta.t0_ms,
+        ),
         unknown_events=unknown,
         duration_ms=duration_ms,
     )
@@ -541,23 +552,27 @@ def _kill_rows(match_id: str, combat: CombatTracker) -> list[dict[str, Any]]:
 def _participant_updates(
     combat: CombatTracker,
     frames: FrameIndex,
-    world: WorldTracker,
     roster: Mapping[str, PlayerRow],
+    t0_ms: int,
 ) -> list[dict[str, Any]]:
     """Telemetry-derived `participants` columns, one row per account."""
-    landings = {
-        # First sample where the player is no longer parachuting is a poor
-        # proxy; LogParachuteLanding is authoritative and world tracks it.
-        r.account_id: None
-        for r in roster.values()
-    }
-    del landings
-
     out: list[dict[str, Any]] = []
     for account, row in roster.items():
         stats = combat.players.get(account)
         death = stats.death if stats else None
-        samples = frames.samples_for(account)
+        # LogParachuteLanding is authoritative for the drop. The first frame
+        # sample is only a fallback for a player who never landed — it can sit
+        # on the aircraft's path, which is why it is not the primary source.
+        landing = frames.landing(account)
+        if landing is not None:
+            land_ms, land_x, land_y = landing
+            landing_x, landing_y = land_x, land_y
+            landed_at_s: float | None = (land_ms - t0_ms) / 1000.0
+        else:
+            samples = frames.samples_for(account)
+            landing_x = samples[0].x if samples else None
+            landing_y = samples[0].y if samples else None
+            landed_at_s = None
         out.append(
             {
                 "account_id": account,
@@ -570,8 +585,9 @@ def _participant_updates(
                 "death_weapon": death.weapon if death else None,
                 "shots_fired": stats.shots_fired if stats else 0,
                 "shots_hit": stats.shots_hit if stats else 0,
-                "landing_x": samples[0].x if samples else None,
-                "landing_y": samples[0].y if samples else None,
+                "landing_x": landing_x,
+                "landing_y": landing_y,
+                "landed_at_s": landed_at_s,
                 "is_bot": row.is_bot,
             }
         )

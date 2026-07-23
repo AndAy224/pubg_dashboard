@@ -360,3 +360,60 @@ export interface IngestStatus {
   pollerLagS: number | null
   rateLimitPerMin: number
 }
+
+// ---------------------------------------------------------------------------
+// strategy
+// ---------------------------------------------------------------------------
+
+/**
+ * Telemetry-derived behavior for one player in one match.
+ *
+ * Every metric is nullable, and null means "not measurable" (no landing, no
+ * teammates, no fights, no circle) — it must never be treated as zero.
+ */
+export interface StrategyMetrics {
+  blueS: number | null
+  blueDamage: number | null
+  rotateLagS: number | null
+  teammateDistAvgCm: number | null
+  teammateNearPct: number | null
+  hotDropN: number | null
+  firstEngageS: number | null
+  dmgDealtEarly: number | null
+  dmgTakenEarly: number | null
+  firstWeaponS: number | null
+  earlyPickupsN: number | null
+}
+
+export interface StrategyMatchRow extends StrategyMetrics {
+  matchId: string
+  playedAt: string
+  mapName: string
+  gameMode: string
+  teamSize: number | null
+  winPlace: number
+  timeSurvived: number
+  kills: number
+  damageDealt: number
+  rideDistance: number
+  walkDistance: number
+}
+
+export interface SquadPlayerCohesion extends StrategyMetrics {
+  accountId: string
+  name: string
+}
+
+export interface SquadMatchRow {
+  matchId: string
+  playedAt: string
+  mapName: string
+  gameMode: string
+  winPlace: number
+  players: SquadPlayerCohesion[]
+}
+
+export interface MatchStrategyRow extends StrategyMetrics {
+  accountId: string
+  name: string
+}
