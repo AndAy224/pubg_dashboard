@@ -13,7 +13,10 @@ const SLOTS = ['var(--p-1)', 'var(--p-2)', 'var(--p-3)', 'var(--p-4)'] as const
 
 /** Hex equivalents of the CSS custom properties, for canvas and Pixi, which
  *  cannot resolve `var()`. Keep in step with `styles/tokens.css`. */
-const SLOT_HEX = ['#f0b429', '#4cc9f0', '#b388ff', '#56d364'] as const
+// Must stay parallel with --p-1..--p-4 in tokens.css — canvas and Pixi cannot
+// resolve var(). Gold left this set deliberately: it now means winning, and
+// nothing else. The trio is CVD-validated; see tokens.css for the derivation.
+const SLOT_HEX = ['#1e9fd2', '#d84378', '#8a72e8', '#8f9a1f'] as const
 
 let order: string[] = []
 const listeners = new Set<() => void>()
@@ -76,7 +79,7 @@ export function playerColour(accountId: string): string {
 
 export function playerColourHex(accountId: string): string {
   const i = slot(accountId)
-  return i < 0 ? '#97a3b4' : SLOT_HEX[i]!
+  return i < 0 ? '#a4a28c' : SLOT_HEX[i]!
 }
 
 /** The same colour as a 0xRRGGBB number, for Pixi tints. */

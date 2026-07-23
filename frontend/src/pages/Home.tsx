@@ -154,7 +154,7 @@ function PlayerCardView({ summary }: { summary: PlayerSummary }) {
       <div className="row">
         <span className="dot-lg" style={{ background: colour }} />
         <Link to={`/players/${card.accountId}`}>
-          <h2>{card.name}</h2>
+          <h2 className="name">{card.name}</h2>
         </Link>
         <div className="spacer" />
         <span className="faint small">{num(card.matches)} matches</span>

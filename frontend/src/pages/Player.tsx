@@ -32,10 +32,10 @@ const MODES = ['squad-fpp', 'duo-fpp', 'solo-fpp', 'squad', 'duo', 'solo']
 /** Bar fills for the placement histogram, matching the grading everywhere else. */
 const BUCKET_FILL: Record<string, string> = {
   '#1': '#f0b429',
-  '2-5': '#d8dee6',
+  '2-5': '#d8dec6',
   '6-10': '#6cb6ff',
-  '11-25': '#3f4a57',
-  '26+': '#2a323c',
+  '11-25': '#454a35',
+  '26+': '#2c2f24',
 }
 
 export function Player() {
@@ -125,7 +125,7 @@ export function Player() {
           />
         )}
         <div style={{ minWidth: 200 }}>
-          <h1>{s?.name ?? accountId}</h1>
+          <h1 className="name">{s?.name ?? accountId}</h1>
           {s && (
             <div className="faint small">
               {num(s.matches)} official matches · best <Place place={s.bestPlace} size="sm" /> ·{' '}
@@ -219,13 +219,13 @@ export function Player() {
               ) : (
                 <ResponsiveContainer width="100%" height={190}>
                   <LineChart data={trend} margin={{ top: 4, right: 8, bottom: 0, left: -18 }}>
-                    <CartesianGrid stroke="#232a34" vertical={false} />
-                    <XAxis dataKey="day" stroke="#5d6875" fontSize={11} tickLine={false} />
-                    <YAxis stroke="#5d6875" fontSize={11} tickLine={false} axisLine={false} />
+                    <CartesianGrid stroke="#2a2e1f" vertical={false} />
+                    <XAxis dataKey="day" stroke="#6e6d5a" fontSize={11} tickLine={false} />
+                    <YAxis stroke="#6e6d5a" fontSize={11} tickLine={false} axisLine={false} />
                     <Tooltip
                       contentStyle={{
-                        background: '#0a0d11',
-                        border: '1px solid #232a34',
+                        background: '#0a0c07',
+                        border: '1px solid #2a2e1f',
                         borderRadius: 6,
                         fontSize: 12,
                       }}
@@ -248,21 +248,21 @@ export function Player() {
                     data={placements.data}
                     margin={{ top: 4, right: 8, bottom: 0, left: -18 }}
                   >
-                    <CartesianGrid stroke="#232a34" vertical={false} />
-                    <XAxis dataKey="label" stroke="#5d6875" fontSize={11} tickLine={false} />
-                    <YAxis stroke="#5d6875" fontSize={11} tickLine={false} axisLine={false} allowDecimals={false} />
+                    <CartesianGrid stroke="#2a2e1f" vertical={false} />
+                    <XAxis dataKey="label" stroke="#6e6d5a" fontSize={11} tickLine={false} />
+                    <YAxis stroke="#6e6d5a" fontSize={11} tickLine={false} axisLine={false} allowDecimals={false} />
                     <Tooltip
-                      cursor={{ fill: '#1a2028' }}
+                      cursor={{ fill: '#1d2117' }}
                       contentStyle={{
-                        background: '#0a0d11',
-                        border: '1px solid #232a34',
+                        background: '#0a0c07',
+                        border: '1px solid #2a2e1f',
                         borderRadius: 6,
                         fontSize: 12,
                       }}
                     />
                     <Bar dataKey="matches" radius={[3, 3, 0, 0]}>
                       {placements.data.map((b) => (
-                        <Cell key={b.label} fill={BUCKET_FILL[b.label] ?? '#3f4a57'} />
+                        <Cell key={b.label} fill={BUCKET_FILL[b.label] ?? '#454a35'} />
                       ))}
                     </Bar>
                   </BarChart>

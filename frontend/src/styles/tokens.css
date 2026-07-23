@@ -1,22 +1,30 @@
-/* Design tokens. Dark-only: this is a game dashboard that sits next to a
-   game, and a light theme would be the odd one out on the second monitor. */
+/* Design tokens — the "After Action" system. Dark-only: this is a game
+   dashboard that sits next to a game, and a light theme would be the odd one
+   out on the second monitor.
+
+   The ground is an olive-black biased toward the gold accent (not the old
+   blue-grey), so the neutrals read as chosen rather than inherited. */
 :root {
-  --bg:        #0e1116;
-  --bg-raised: #151a21;
-  --bg-inset:  #0a0d11;
-  --bg-hover:  #1a2028;
-  --border:    #232a34;
-  --border-strong: #333d4a;
+  --bg:        #0d0f0a;
+  --bg-raised: #161911;
+  --bg-inset:  #0a0c07;
+  --bg-hover:  #1d2117;
+  --border:    #2a2e1f;
+  --border-strong: #3d422e;
 
-  --text:      #e6ebf2;
-  --text-dim:  #97a3b4;
-  --text-faint:#5d6875;
+  /* Warm off-whites, matching the olive ground. */
+  --text:      #eae8dc;
+  --text-dim:  #a4a28c;
+  --text-faint:#6e6d5a;
 
-  --accent:      #f0b429;   /* PUBG-ish amber */
+  /* Gold means winning — placement, wins, the brand — and nothing else.
+     It used to double as player 1's identity colour, so a kill chip and a
+     win chip could claim the same hue on one screen. */
+  --accent:      #f0b429;
   --accent-dim:  #8a6a1a;
-  --good:        #3fb950;
-  --bad:         #f85149;
-  --info:        #58a6ff;
+  --good:        #57c05a;
+  --bad:         #e5484d;
+  --info:        #6cb6ff;
   --bot:         #6e7681;
 
   /* --- Identity colours -------------------------------------------------
@@ -24,25 +32,36 @@
      chips in the match feed, chart lines, form strips. This is what lets a
      feed row say who did what without spending a word on it. Assigned by
      account id in lib/players.ts, never by array position — a new tracked
-     player must not recolour the other two. */
-  --p-1: #f0b429;   /* amber  */
-  --p-2: #4cc9f0;   /* cyan   */
-  --p-3: #b388ff;   /* violet */
-  --p-4: #56d364;   /* green — spare, for a fourth tracked player */
+     player must not recolour the other two.
+
+     The trio was validated with the dataviz palette checker against this
+     surface (all-pairs mode — map dots behave like a scatter): lightness
+     band, chroma floor, normal-vision ΔE and contrast all pass. Green was
+     rejected outright — green↔rose fails deuteranopia, the classic
+     red-green trap — which is why the spare is an olive-chartreuse.
+     Violet↔cyan sits in the CVD warn band, acceptable only because an
+     identity dot never appears without the player's name beside it. */
+  --p-1: #1e9fd2;   /* cyan   */
+  --p-2: #d84378;   /* rose   */
+  --p-3: #8a72e8;   /* violet */
+  --p-4: #8f9a1f;   /* olive-chartreuse — spare, for a fourth tracked player */
 
   /* --- Placement grading ------------------------------------------------
      Placement is the game's scoreline, so it is graded identically on every
      surface. Anything past #10 stays neutral: the difference between #34 and
      #47 is not worth a colour. */
   --place-win:   #f0b429;
-  --place-top5:  #d8dee6;
+  --place-top5:  #d8dec6;   /* bone, warmed to sit on the olive ground */
   --place-top10: #6cb6ff;
-  --place-rest:  #5d6875;
+  --place-rest:  #6e6d5a;
 
-  --radius: 6px;
-  --radius-lg: 10px;
+  /* Squared-off panels are part of the field-instrument look. */
+  --radius: 2px;
+  --radius-lg: 3px;
+
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-
-  --shell-nav: 232px;
+  /* Barlow Condensed, self-hosted (public/fonts/) — headings, labels, big
+     numbers. Two latin woff2 files, ~44 KB total; @font-face in base.css. */
+  --display: 'Barlow Condensed', 'Arial Narrow', var(--sans);
 }

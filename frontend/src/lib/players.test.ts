@@ -45,7 +45,7 @@ describe('identity colours', () => {
     // Never borrow a tracked player's colour: the dot is what says "this is
     // one of us" on a scoreboard of a hundred names.
     expect(playerColour('account.stranger')).toBe('var(--text-dim)')
-    expect(playerColourHex('account.stranger')).toBe('#97a3b4')
+    expect(playerColourHex('account.stranger')).toBe('#a4a28c')
     expect(isTracked('account.stranger')).toBe(false)
     expect(isTracked(ANDAY)).toBe(true)
   })
@@ -55,7 +55,7 @@ describe('identity colours', () => {
     // parallel — a mismatch shows as a replay dot in a different colour from
     // the same player's nav entry.
     const slots = ['var(--p-1)', 'var(--p-2)', 'var(--p-3)']
-    const hexes = ['#f0b429', '#4cc9f0', '#b388ff']
+    const hexes = ['#1e9fd2', '#d84378', '#8a72e8']
     for (const id of [ANDAY, SIERIUS, GAINZ]) {
       expect(hexes[slots.indexOf(playerColour(id))]).toBe(playerColourHex(id))
     }

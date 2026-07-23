@@ -8,11 +8,11 @@ import { playerColour, registerPlayers, useTrackedPlayers } from '../lib/players
 import './AppShell.css'
 
 const NAV = [
-  { to: '/', label: 'Overview', icon: '⌂', end: true },
-  { to: '/matches', label: 'Matches', icon: '≣' },
-  { to: '/heatmaps', label: 'Heatmaps', icon: '▦' },
-  { to: '/compare', label: 'Compare', icon: '⇄' },
-  { to: '/strategy', label: 'Strategy', icon: '◎' },
+  { to: '/', label: 'Overview', end: true },
+  { to: '/matches', label: 'Matches' },
+  { to: '/heatmaps', label: 'Heatmaps' },
+  { to: '/compare', label: 'Compare' },
+  { to: '/strategy', label: 'Strategy' },
 ]
 
 function IngestBadge() {
@@ -41,12 +41,13 @@ function IngestBadge() {
 }
 
 /**
- * The tracked players, in the nav.
+ * The squad strip: the tracked players, always one glance away.
  *
- * Three people are the entire point of this dashboard; reaching their pages
- * previously meant finding them in a table first.
+ * Three people are the entire point of this dashboard. In the old sidebar
+ * they were nav entries; here they are a persistent strip under the command
+ * bar, on every page.
  */
-function TrackedNav() {
+function SquadStrip() {
   const { data } = useQuery({
     queryKey: ['players', 'tracked'],
     queryFn: () => get<PlayerCard[]>('/players', { tracked: true }),
@@ -59,29 +60,22 @@ function TrackedNav() {
 
   if (!data?.length) return null
   return (
-    <>
-      <div className="nav-sep" />
+    <div className="squadstrip">
       {data.map((p) => (
-        <NavLink
-          key={p.accountId}
-          to={`/players/${p.accountId}`}
-          className="navlink player"
-          /* Below 900px the label is hidden and this is all that names it. */
-          title={`${p.name} · ${num(p.matches)} matches`}
-        >
-          <span className="dot-lg" style={{ background: playerColour(p.accountId) }} />
-          <span className="nav-name">{p.name}</span>
-          <span className="faint nav-sub">{num(p.matches)}</span>
+        <NavLink key={p.accountId} to={`/players/${p.accountId}`} className="sqchip">
+          <span className="sq-dot" style={{ background: playerColour(p.accountId) }} />
+          <span className="sq-name">{p.name}</span>
+          <span className="sq-sub faint num">{num(p.matches)} drops</span>
         </NavLink>
       ))}
-      <div className="nav-hint faint" title="last poll of the stalest tracked player">
+      <div className="sq-hint faint" title="last poll of the stalest tracked player">
         {data.some((p) => p.consecutivePollFailures > 0) ? (
           <span className="bad">poll failures</span>
         ) : (
           <>polled {ago(data[0]?.lastPolledAt)}</>
         )}
       </div>
-    </>
+    </div>
   )
 }
 
@@ -100,26 +94,24 @@ export function AppShell() {
 
   return (
     <div className="shell">
-      <nav className="nav">
-        <div className="brand">
-          PUBG<span className="faint"> dash</span>
-        </div>
-        {NAV.map((n) => (
-          <NavLink key={n.to} to={n.to} end={n.end} className="navlink" title={n.label}>
-            <span className="nav-icon">{n.icon}</span>
-            <span className="nav-name">{n.label}</span>
-          </NavLink>
-        ))}
-
-        <TrackedNav />
-
-        <div className="spacer" />
-        <NavLink to="/settings" className="navlink" title="Settings">
-          <span className="nav-icon">⚙</span>
-          <span className="nav-name">Settings</span>
+      <header className="cmdbar">
+        <NavLink to="/" className="brand">
+          PUBG<em>DASH</em>
         </NavLink>
+        <nav className="cmdnav">
+          {NAV.map((n) => (
+            <NavLink key={n.to} to={n.to} end={n.end} className="cmdlink">
+              {n.label}
+            </NavLink>
+          ))}
+        </nav>
+        <span className="spacer" />
         <IngestBadge />
-      </nav>
+        <NavLink to="/settings" className="cmdgear" title="Settings">
+          ⚙
+        </NavLink>
+      </header>
+      <SquadStrip />
       <main className="content">
         <Outlet />
       </main>

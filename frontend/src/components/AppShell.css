@@ -1,71 +1,91 @@
-.shell { display: flex; height: 100%; }
+/* The "After Action" shell: a slim command bar on top and a persistent squad
+   strip under it, instead of the old 232px sidebar. Two reasons: maps — the
+   app's best asset — get the full viewport width, and the squad is one glance
+   away on every page instead of living in nav chrome. */
 
-.nav {
-  width: var(--shell-nav);
-  flex: 0 0 var(--shell-nav);
+.shell { display: flex; flex-direction: column; height: 100%; }
+
+.cmdbar {
+  display: flex; align-items: center; gap: 22px;
+  height: 52px; flex: 0 0 auto;
+  padding: 0 20px;
   background: var(--bg-raised);
-  border-right: 1px solid var(--border);
-  padding: 16px 12px;
-  display: flex; flex-direction: column; gap: 2px;
-  overflow-y: auto;
+  border-bottom: 1px solid var(--border);
 }
-.brand { font-weight: 700; font-size: 15px; letter-spacing: -0.02em; padding: 4px 10px 14px; }
 
-.navlink {
-  display: flex; align-items: center; gap: 10px;
-  padding: 7px 10px; border-radius: var(--radius);
-  color: var(--text-dim); font-weight: 500;
+.brand {
+  font-family: var(--display); font-weight: 700; font-size: 20px;
+  letter-spacing: .06em;
 }
-.navlink:hover { background: var(--bg-inset); color: var(--text); }
-.navlink.active { background: var(--bg-inset); color: var(--accent); }
-.nav-icon { width: 14px; text-align: center; opacity: .8; font-size: 13px; }
-.nav-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.nav-sub { font-size: 11px; font-family: var(--mono); }
+.brand em { font-style: normal; color: var(--accent); }
+.brand:hover { color: inherit; }
+.brand:hover em { color: var(--accent); }
 
-/* A tracked player keeps their identity colour in the nav even when active,
-   so the dot means the same thing here as on every match row. */
-.navlink.player.active { color: var(--text); }
-.dot-lg { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 9px; }
+.cmdnav { display: flex; gap: 2px; align-self: stretch; align-items: stretch; }
+.cmdlink {
+  display: inline-flex; align-items: center;
+  font-family: var(--display); font-weight: 600; font-size: 14px;
+  letter-spacing: .14em; text-transform: uppercase;
+  color: var(--text-dim); padding: 0 12px;
+  border-bottom: 2px solid transparent;
+  /* Compensate the indicator so the label stays vertically centred. */
+  border-top: 2px solid transparent;
+}
+.cmdlink:hover { color: var(--text); }
+.cmdlink.active { color: var(--text); border-bottom-color: var(--accent); }
 
-.nav-sep { height: 1px; background: var(--border); margin: 10px 10px 8px; }
-.nav-hint { font-size: 11px; padding: 4px 10px 0; }
-
-.content { flex: 1; overflow: auto; padding: 22px 26px 60px; }
+.cmdgear { font-size: 16px; color: var(--text-dim); padding: 4px 2px; }
+.cmdgear.active, .cmdgear:hover { color: var(--text); }
 
 .badge {
   display: flex; align-items: center; gap: 6px;
-  font-size: 12px; padding: 7px 10px; margin-top: 6px;
-  border-top: 1px solid var(--border); color: var(--text-dim);
+  font-size: 12px; color: var(--text-dim);
 }
 
-/**
- * Below the split point the nav becomes an icon rail.
- *
- * At 380px a 232px nav left 148px of content pane — 61% of the screen spent
- * on navigation, with a 917px page scrolling inside a strip narrower than a
- * phone. The document itself never overflowed (`.content` has `overflow:
- * auto`, which also makes its flex `min-width: auto` resolve to 0), so this
- * was not a stray wide element to hunt down; the shell was simply spending
- * its width in the wrong place.
- *
- * An icon rail rather than a drawer: navigation stays visible and reachable
- * with no toggle state to get stuck, and the tracked players keep their
- * identity colour, which already means the same thing on every match row.
- * Labels move to `title`, set in AppShell.tsx.
- */
-@media (max-width: 900px) {
-  .shell { --shell-nav: 56px; }
-  .nav { padding: 12px 6px; }
-  .navlink { justify-content: center; padding: 9px 0; gap: 0; }
-  .nav-name, .nav-sub, .nav-hint, .brand .faint { display: none; }
-  .brand { font-size: 13px; padding: 4px 0 12px; text-align: center; }
-  .nav-icon { font-size: 15px; }
-  .nav-sep { margin: 10px 4px 8px; }
-  .badge { justify-content: center; padding: 7px 0; }
-  .badge > :not(.dot) { display: none; }
-  .content { padding: 16px 14px 48px; }
+/* --- Squad strip -------------------------------------------------------- */
+.squadstrip {
+  display: flex; align-items: stretch; flex: 0 0 auto;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
 }
+.sqchip {
+  display: flex; align-items: center; gap: 10px;
+  flex: 1 1 0; min-width: 0;
+  padding: 8px 18px;
+  border-right: 1px solid var(--border);
+}
+.sqchip:hover { background: var(--bg-hover); color: inherit; }
+/* On their own page, the chip reads as "you are here" without stealing the
+   identity colour for the state. */
+.sqchip.active { background: var(--bg-raised); box-shadow: inset 0 -2px 0 var(--accent); }
+.sq-dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 9px; }
+.sq-name {
+  font-family: var(--display); font-weight: 700; font-size: 16px;
+  letter-spacing: .04em;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sq-sub { font-size: 11px; margin-left: auto; white-space: nowrap; }
+.sq-hint {
+  display: flex; align-items: center;
+  font-size: 11px; padding: 0 16px; white-space: nowrap;
+}
+
+.content { flex: 1 1 auto; overflow: auto; padding: 22px 26px 60px; }
+
 .dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 8px; }
 .dot.ok { background: var(--good); }
 .dot.warn { background: var(--accent); }
 .dot.bad { background: var(--bad); }
+
+/* --- Narrow screens ------------------------------------------------------
+   A top bar degrades naturally where the sidebar needed an icon rail: the
+   nav row scrolls sideways as a unit, and the strip drops its counts. */
+@media (max-width: 900px) {
+  .cmdbar { gap: 12px; padding: 0 12px; overflow-x: auto; }
+  .cmdlink { padding: 0 8px; letter-spacing: .08em; }
+  .badge > :not(.dot) { display: none; }
+  .sqchip { padding: 8px 10px; }
+  .sq-sub, .sq-hint { display: none; }
+  .content { padding: 16px 14px 48px; }
+}

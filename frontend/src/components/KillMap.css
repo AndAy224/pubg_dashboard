@@ -5,7 +5,7 @@
 
 .kill-dot {
   fill: #f85149; fill-opacity: .55;
-  stroke: #0e1116; stroke-width: .5;
+  stroke: #0d0f0a; stroke-width: .5;
   cursor: crosshair;
 }
 .kill-dot.bot { fill: var(--bot); fill-opacity: .35; }

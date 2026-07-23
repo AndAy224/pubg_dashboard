@@ -1242,3 +1242,46 @@ scatter dots coloured per player so "who drives this pattern" stays visible,
 and the weapons table merged by `mergeWeapons` in `lib/strategy.ts` (kills
 sum, longest is a max, average range weighted by kills). Purely client-side —
 no new endpoint.
+
+## 24. The "After Action" redesign shipped — 2026-07-23
+
+The design proposal (artifact "After Action") is now the live UI. What changed
+and where:
+
+- **Tokens** (`styles/tokens.css`): olive-black ground biased toward the gold
+  accent (`--bg #0d0f0a`, `--bg-raised #161911`, warm off-white ink), squared
+  radii (2/3px), and a `--display` face. Gold (`#f0b429`) now means winning,
+  placement and the brand — it is no longer any player's identity colour.
+- **Identity trio re-hued**: cyan `#1e9fd2` / rose `#d84378` / violet
+  `#8a72e8`, spare olive-chartreuse `#8f9a1f` — CVD-validated (all-pairs)
+  against the new surface; green was rejected because green↔rose fails
+  deuteranopia. Changed in exactly the two places that must stay parallel:
+  `tokens.css` `--p-1..4` and `lib/players.ts` `SLOT_HEX` (canvas/Pixi cannot
+  resolve `var()`); `players.test.ts` pins both.
+- **Type**: Barlow Condensed 600/700, self-hosted in `public/fonts/` (~44 KB
+  latin woff2, `@font-face` in `base.css`, no CDN). Headings, table headers,
+  tile values, session numbers and buttons wear it; body stays system sans,
+  data columns stay tabular mono. **Player names are never uppercased** — a
+  `.name` escape class (base.css) protects them wherever a heading or `th`
+  transform would blur "DaddyGainz" into "DADDYGAINZ" (Home card headers,
+  Player hero, Compare column headers).
+- **Shell** (`AppShell.tsx/.css`, rewritten): the 232px sidebar is gone.
+  A 52px top command bar (brand, uppercase condensed nav with gold underline,
+  ingest badge, settings gear) plus a persistent **squad strip** of the
+  tracked players under it. Maps get the full viewport width. Narrow screens
+  drop to horizontal scroll — the old icon-rail media query is gone with the
+  sidebar.
+- **Hardcoded blue-grey hexes swept** to olive equivalents: `tr.tracked`
+  and the replay's `.feed-row.tracked` (#1b2015), form-strip cells, skeleton
+  shimmer, notice, mapview buttons, replay timeline (`.tl-alive`/`.tl-phase`),
+  Recharts chrome in Player/Compare (grid/axis/tooltip), placement-bucket
+  neutrals, KillMap dot stroke. The heatmap ramp is untouched — cyan→amber→red
+  reads correctly on the new ground.
+
+Verified in a real browser (headless Chrome + probe-replay) on Overview,
+Match, Strategy, Player, Compare, Heatmaps and the Replay. One false alarm
+worth remembering: **Recharts entry animations mean an early headless
+screenshot shows axes with no marks** — bars/lines animate in over ~1.5 s of
+requestAnimationFrame time that `--virtual-time-budget` does not reliably
+deliver. The DOM had correct geometry and computed styles all along; wait
+~4 s of real time before screenshotting chart pages.

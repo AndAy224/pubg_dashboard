@@ -116,7 +116,7 @@ export function Compare() {
                   <tr>
                     <th>Stat</th>
                     {stats.map((s) => (
-                      <th key={s.accountId} className="r">
+                      <th key={s.accountId} className="r name">
                         <Link to={`/players/${s.accountId}`} style={{ color: playerColourHex(s.accountId) }}>
                           {s.name}
                         </Link>
@@ -153,9 +153,9 @@ export function Compare() {
             </p>
             <ResponsiveContainer width="100%" height={300}>
               <RadarChart data={radar}>
-                <PolarGrid stroke="#232a34" />
+                <PolarGrid stroke="#2a2e1f" />
                 <PolarAngleAxis dataKey="axis" tick={{ fill: '#97a3b4', fontSize: 11 }} />
-                <PolarRadiusAxis domain={[0, 100]} tick={{ fill: '#5d6875', fontSize: 10 }} />
+                <PolarRadiusAxis domain={[0, 100]} tick={{ fill: '#6e6d5a', fontSize: 10 }} />
                 {stats.map((s) => (
                   <Radar
                     key={s.accountId}
@@ -169,8 +169,8 @@ export function Compare() {
                 ))}
                 <Tooltip
                   contentStyle={{
-                    background: '#0a0d11',
-                    border: '1px solid #232a34',
+                    background: '#0a0c07',
+                    border: '1px solid #2a2e1f',
                     borderRadius: 6,
                     fontSize: 12,
                   }}
