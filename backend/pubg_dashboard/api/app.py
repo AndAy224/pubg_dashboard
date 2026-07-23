@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any, Final
 
 import structlog
 from fastapi import FastAPI, HTTPException
@@ -11,6 +13,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.responses import Response
+from starlette.types import Scope
 
 from pubg_dashboard.api.routers import (
     health,
@@ -78,6 +82,42 @@ def create_app() -> FastAPI:
     return app
 
 
+#: Fingerprinted by Vite, so the name changes whenever the bytes do.
+_IMMUTABLE: Final = "public, max-age=31536000, immutable"
+
+#: The SPA shell. **Not** `no-store` — `no-cache` still lets the browser keep a
+#: copy, it just has to revalidate before using it, which the ETag turns into a
+#: cheap 304. Without this header there is no freshness information at all and
+#: browsers fall back to a *heuristic*: they invent a lifetime from
+#: `Last-Modified`. A shell served from that heuristic references the previous
+#: build's chunk hashes, and if those are cached too the whole stale app boots
+#: happily — the page works, it is simply the old one. That is indistinguishable
+#: from a feature that was never deployed, and it is how a steering wheel that
+#: renders correctly on the server can be invisible in a tab that was already
+#: open.
+_REVALIDATE: Final = "no-cache"
+
+
+class _FingerprintedStatic(StaticFiles):
+    """`/assets` with a real immutable header rather than just an ETag.
+
+    `StaticFiles` sends `ETag` and `Last-Modified` but no `Cache-Control`, so
+    every asset costs a revalidation round trip on every navigation. The names
+    are content hashes, so they can be cached permanently.
+    """
+
+    def file_response(
+        self,
+        full_path: Any,
+        stat_result: os.stat_result,
+        scope: Scope,
+        status_code: int = 200,
+    ) -> Response:
+        response = super().file_response(full_path, stat_result, scope, status_code)
+        response.headers["cache-control"] = _IMMUTABLE
+        return response
+
+
 def _mount_frontend(app: FastAPI) -> None:
     """Serve the built SPA, if it has been built.
 
@@ -94,7 +134,7 @@ def _mount_frontend(app: FastAPI) -> None:
     assets = dist / "assets"
     if assets.is_dir():
         # Vite fingerprints these filenames, so they are safe to cache forever.
-        app.mount("/assets", StaticFiles(directory=assets), name="assets")
+        app.mount("/assets", _FingerprintedStatic(directory=assets), name="assets")
 
     resolved_dist = dist.resolve()
 
@@ -119,8 +159,10 @@ def _mount_frontend(app: FastAPI) -> None:
         if path:
             candidate = (dist / path).resolve()
             if candidate.is_relative_to(resolved_dist) and candidate.is_file():
-                return FileResponse(candidate)
-        return FileResponse(index)
+                # Anything reached by name here is unfingerprinted (favicon,
+                # manifest), so it revalidates like the shell.
+                return FileResponse(candidate, headers={"cache-control": _REVALIDATE})
+        return FileResponse(index, headers={"cache-control": _REVALIDATE})
 
     log.info("api.frontend_mounted", path=str(dist))
 

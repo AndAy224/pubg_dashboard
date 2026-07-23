@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import gzip
+import re
 from array import array
 from collections.abc import AsyncIterator
 
@@ -438,6 +439,34 @@ async def test_spa_serves_client_routes(client: httpx.AsyncClient) -> None:
         pytest.skip("frontend not built")
     assert r.status_code == 200
     assert "text/html" in r.headers["content-type"]
+
+
+async def test_the_shell_must_revalidate_and_assets_must_not(
+    client: httpx.AsyncClient,
+) -> None:
+    """A deploy nobody receives looks exactly like a feature never written.
+
+    `FileResponse` sets no `Cache-Control`, so the shell carried no freshness
+    information at all and browsers fell back to inventing a lifetime from
+    `Last-Modified`. A shell served from that heuristic names the *previous*
+    build's chunk hashes, and if those are cached too the whole stale app boots
+    happily — the page works, it is simply the old one. That is how a feature
+    verified rendering on the server can be invisible in an already-open tab.
+
+    The fingerprinted assets want the opposite: their names are content hashes,
+    so revalidating them on every navigation is pure round trips.
+    """
+    shell = await client.get("/matches/whatever/replay")
+    if shell.status_code == 404:
+        pytest.skip("frontend not built")
+    assert shell.headers.get("cache-control") == "no-cache"
+
+    index = await client.get("/")
+    asset = re.search(r'assets/[A-Za-z0-9_.-]+\.js', index.text)
+    assert asset, "the shell should reference at least one hashed asset"
+    r = await client.get(f"/{asset.group(0)}")
+    assert r.status_code == 200
+    assert "immutable" in r.headers.get("cache-control", "")
 
 
 async def test_api_routes_are_not_shadowed_by_the_spa(client: httpx.AsyncClient) -> None:
