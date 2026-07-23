@@ -40,6 +40,8 @@ export interface PlayerCard {
   lastSeen: string | null
   lastPolledAt: string | null
   consecutivePollFailures: number
+  /** Set only for players tracking was deliberately turned off for. */
+  untrackedAt?: string | null
 }
 
 export interface PlayerStats {

@@ -60,6 +60,10 @@ class PlayerCard(ApiModel):
     last_seen: dt.datetime | None
     last_polled_at: dt.datetime | None
     consecutive_poll_failures: int
+    #: Set only for players tracking was deliberately turned off for, which is
+    #: what distinguishes them from the thousands of opponents that also have
+    #: `players` rows.
+    untracked_at: dt.datetime | None = None
 
 
 class PlayerStats(ApiModel):

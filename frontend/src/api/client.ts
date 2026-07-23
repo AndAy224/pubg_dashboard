@@ -37,23 +37,36 @@ function qs(params?: Record<string, unknown>): string {
   return s ? `?${s}` : ''
 }
 
+/**
+ * The server's own explanation of a failure, or the status line if it had none.
+ *
+ * FastAPI puts it in `detail`, and it is usually the only thing that says what
+ * to do about the error — "no player named 'chocotaco'; names are
+ * CASE-SENSITIVE" versus the bare words "Not Found".
+ */
+async function errorFrom(r: Response): Promise<ApiError> {
+  let detail = r.statusText
+  try {
+    detail = (await r.json()).detail ?? detail
+  } catch {
+    /* the body was not JSON; the status line is all we have */
+  }
+  return new ApiError(r.status, detail)
+}
+
 export async function get<T>(path: string, params?: Record<string, unknown>): Promise<T> {
   const r = await fetch(`${BASE}${path}${qs(params)}`)
-  if (!r.ok) {
-    let detail = r.statusText
-    try {
-      detail = (await r.json()).detail ?? detail
-    } catch {
-      /* the body was not JSON; the status line is all we have */
-    }
-    throw new ApiError(r.status, detail)
-  }
+  if (!r.ok) throw await errorFrom(r)
   return (await r.json()) as T
 }
 
 export async function post<T>(path: string, params?: Record<string, unknown>): Promise<T> {
   const r = await fetch(`${BASE}${path}${qs(params)}`, { method: 'POST' })
-  if (!r.ok) throw new ApiError(r.status, r.statusText)
+  // Shares `errorFrom` with `get` deliberately. This used to throw
+  // `r.statusText` and discard the body, so every mutation failure reached the
+  // user as "Not Found" or "Bad Request" — the two words least likely to be the
+  // reason.
+  if (!r.ok) throw await errorFrom(r)
   return (await r.json()) as T
 }
 

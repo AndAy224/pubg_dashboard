@@ -20,8 +20,17 @@ from pubg_dashboard.api.schemas import (
     TimeseriesPoint,
     WeaponStat,
 )
+from pubg_dashboard.config import get_settings
 from pubg_dashboard.db.models import KillEvent, Match, Participant, Player, Roster
 from pubg_dashboard.db.session import SessionDep
+from pubg_dashboard.ingest.tracking import (
+    PlayerNameNotResolved,
+    track_by_account_id,
+    track_by_name,
+    untrack,
+)
+from pubg_dashboard.ingest.wiring import build_context
+from pubg_dashboard.pubg.errors import PubgApiError, RateLimited
 from pubg_dashboard.telemetry.maps import display_name
 
 router = APIRouter(prefix="/players", tags=["players"])
@@ -41,6 +50,18 @@ PLACEMENT_BUCKETS: tuple[tuple[str, int, int | None], ...] = (
 async def list_players(
     session: SessionDep,
     tracked: Annotated[bool | None, Query(description="Filter by tracked flag.")] = None,
+    formerly_tracked: Annotated[
+        bool,
+        Query(
+            alias="formerlyTracked",
+            description=(
+                "Only players tracking was deliberately turned off for. "
+                "`tracked=false` alone is not this question — `players` holds a "
+                "row per human opponent too, so almost every row in it is "
+                "untracked and never was tracked."
+            ),
+        ),
+    ] = False,
     q: Annotated[str | None, Query(description="Case-insensitive name search.")] = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
 ) -> list[PlayerCard]:
@@ -61,6 +82,8 @@ async def list_players(
     )
     if tracked is not None:
         stmt = stmt.where(Player.tracked.is_(tracked))
+    if formerly_tracked:
+        stmt = stmt.where(Player.tracked.is_(False), Player.untracked_at.is_not(None))
     if q:
         # Matches ix_players_name_lower.
         stmt = stmt.where(func.lower(Player.name).like(f"%{q.lower()}%"))
@@ -76,9 +99,102 @@ async def list_players(
             last_seen=last,
             last_polled_at=p.last_polled_at,
             consecutive_poll_failures=p.consecutive_poll_failures,
+            untracked_at=p.untracked_at,
         )
         for p, n, last in (await session.execute(stmt)).all()
     ]
+
+
+# ---------------------------------------------------------------------------
+# Tracking
+# ---------------------------------------------------------------------------
+@router.post("/track", status_code=201)
+async def track_player(
+    session: SessionDep,
+    name: Annotated[str, Query(description="Exact in-game name. CASE-SENSITIVE.")],
+    shard: Annotated[str | None, Query(description="Defaults to the configured shard.")] = None,
+) -> dict[str, object]:
+    """Start tracking a player, by name.
+
+    **Costs one rate-limit token** of the 10/min budget — the name has to be
+    resolved to an account id, and only `GET /players` can do that. The poller
+    spends about one token per five minutes, so this is not contention worth
+    worrying about; it is done inline rather than queued because "that name
+    does not exist" is the common outcome and it is useless to the operator
+    minutes later, in a log they are not reading.
+
+    The backfill it queues costs a second token when the worker picks it up.
+    """
+    resolved_shard = shard or get_settings().pubg_default_shard
+    context = build_context(with_storage=False)
+    try:
+        outcome = await track_by_name(session, context.api, name, resolved_shard)
+    except PlayerNameNotResolved as exc:
+        # Name the two real causes rather than guessing between them. An error
+        # that picks one sends the reader off in a single direction, and the
+        # case-sensitivity trap is invisible unless it is spelled out.
+        raise HTTPException(
+            404,
+            f"no player named '{name}' on shard '{resolved_shard}'. "
+            "Names are CASE-SENSITIVE — 'chocotaco' and 'chocoTaco' are "
+            "different lookups, so copy it exactly as it appears in game. "
+            "If the case is right, the account may have been renamed, or it is "
+            "on another shard (xbox / psn / kakao).",
+        ) from exc
+    except RateLimited as exc:
+        raise HTTPException(
+            429, "PUBG's rate limit is spent; try again in a minute."
+        ) from exc
+    except PubgApiError as exc:
+        # 502 and not 500: the fault is upstream, and saying so is the
+        # difference between "retry" and "read the server logs".
+        raise HTTPException(502, f"PUBG API error: {exc}") from exc
+    finally:
+        await context.api.aclose()
+
+    await session.commit()
+    return {
+        "accountId": outcome.account_id,
+        "name": outcome.name,
+        "status": outcome.status,
+        "backfillQueued": outcome.backfill_queued,
+    }
+
+
+@router.post("/{account_id}/track", status_code=200)
+async def retrack_player(session: SessionDep, account_id: str) -> dict[str, object]:
+    """Track a player already in the database. **Spends no API budget.**
+
+    This is the whole point of keeping the row when tracking is turned off: the
+    account id is the thing a name lookup costs a token to discover, and it is
+    already here.
+    """
+    outcome = await track_by_account_id(session, account_id)
+    if outcome is None:
+        raise HTTPException(404, f"unknown player {account_id}")
+    await session.commit()
+    return {
+        "accountId": outcome.account_id,
+        "name": outcome.name,
+        "status": outcome.status,
+        "backfillQueued": outcome.backfill_queued,
+    }
+
+
+@router.post("/{account_id}/untrack", status_code=200)
+async def untrack_player(session: SessionDep, account_id: str) -> dict[str, object]:
+    """Stop polling a player.
+
+    Nothing is deleted. Their matches, participant rows and telemetry stay, so
+    `/players/{id}/stats` keeps answering and every heatmap bin they contributed
+    is untouched — they simply stop costing rate-limit budget.
+    """
+    player = await untrack(session, account_id)
+    if player is None:
+        raise HTTPException(404, f"no tracked player {account_id}")
+    name = player.name
+    await session.commit()
+    return {"accountId": account_id, "name": name, "tracked": False}
 
 
 async def career_stats(

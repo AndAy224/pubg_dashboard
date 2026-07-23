@@ -81,6 +81,14 @@ class Player(Base):
     consecutive_poll_failures: Mapped[int] = mapped_column(
         Integer, default=0, server_default=text("0")
     )
+    # When tracking was *turned off*, and NULL for everyone else.
+    #
+    # This exists because `tracked = false` is not the question anyone wants
+    # answered: opponents get rows here too, so 4,338 of the 4,341 players in
+    # the archive are untracked and were never tracked in the first place.
+    # Without this column, "players I stopped tracking" is indistinguishable
+    # from "everyone who was ever in one of my lobbies".
+    untracked_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
 
     participations: Mapped[list[Participant]] = relationship(
         back_populates="player",

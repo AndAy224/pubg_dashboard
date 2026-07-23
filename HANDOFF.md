@@ -1125,3 +1125,69 @@ cancel. `draggable={false}` on the tiles, `user-select: none` on the stage.
 `scripts/probe-map.mjs` is the harness — it asserts the wheel anchors under the
 cursor, the drag moves 1:1, the pyramid level matches, no tile is draggable and
 the page does not overflow horizontally. Run it against both surfaces.
+
+---
+
+## 24. Add and remove tracked players from Settings — added 2026-07-23
+
+Tracking was CLI-only (`pubgd player add|remove`). Settings can now do both:
+a name field under the tracked table, an `untrack` button per row, and a
+**Not tracked** section offering a one-click re-track that spends no
+rate-limit budget.
+
+`ingest/tracking.py` is the state machine, and both the CLI and the API go
+through it — the parts that must not differ are subtle. A re-track resets
+`consecutive_poll_failures`, or `select_due_players`' exponential backoff (up to
+six hours) keeps punishing an account for failures that predate it. A rename
+refreshes `name` on the existing row, because the account id is the stable key.
+Untracking never deletes: `tests/test_api.py` asserts the participant row count
+is unchanged and that `/players/{id}/stats` still answers.
+
+**Adding costs a token; re-tracking costs nothing.** Only `GET /players` can
+turn a name into an account id, and that is the metered endpoint. Once the row
+exists the id is already known, which is the whole reason the row survives an
+untrack. Resolution is synchronous rather than queued because "that name does
+not exist" is the common outcome and is useless to the operator minutes later
+in a log nobody is reading. The backfill it queues spends a second token when
+the worker picks it up.
+
+### `tracked = false` is not "players I stopped tracking"
+
+`players` holds a row per **human opponent** too — that is what makes opponent
+lookup and aggregate heatmaps free — so 4,338 of the 4,341 rows are untracked
+and were never tracked at all. A "not tracked" list built on the flag alone
+renders every stranger who has ever been in a lobby.
+
+Migration 0004 adds `players.untracked_at`, set by the shared `untrack` (and by
+the CLI's `player remove`, or a CLI removal would not be re-trackable from the
+UI). `GET /players?formerlyTracked=true` is the filter.
+
+Rejected: inferring it from `last_polled_at IS NOT NULL`. That is exact today —
+only the poller writes it and it only polls tracked players, verified 3 of 3
+with zero false positives — but it is inference that stops holding the moment
+the poller changes, and it misses anyone untracked inside the five-minute
+window before their first poll.
+
+### An unknown name 404s, and the generic message is about the wrong thing
+
+`ports.PubgApi.get_players_by_names` documents it and the live API confirms it;
+the first cut assumed a 200 with an empty `data` array, which *also* happens.
+Left to propagate, a mistyped name reached the operator as the client's generic
+404 text: **"unknown resource, or outside the 14-day retention window"** — true
+of a match, nonsense about a player name, and it sends the reader to look at
+retention instead of at their keyboard. Found by typing a bad name into a real
+browser, not by reading the code.
+
+`tracking` now converts any 404 into `PlayerNameNotResolved`, and the router
+answers with the two causes that actually apply: case (PUBG's lookup is
+case-sensitive, so `chocotaco` and `chocoTaco` are different lookups) and
+shard. Asked by `status_code_of(exc) == 404` rather than `isinstance`, because
+`ingest` reaches the API through a Protocol and there are **two** error classes
+for the same 404 — `get_players_payload` raises a generic `PubgApiError` while
+the name-probing path raises `PlayerNotFound`. Both are covered.
+
+### `post()` was discarding every server error message
+
+`api/client.ts::post` threw `r.statusText` while `get` parsed `detail` out of
+the body. Unfixed, the entire explanation above would have reached the user as
+the two words **"Not Found"**. Both now share one `errorFrom` helper.

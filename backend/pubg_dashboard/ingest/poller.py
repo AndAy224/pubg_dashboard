@@ -82,8 +82,13 @@ def parse_players_payload(payload: Mapping[str, Any]) -> list[PlayerRef]:
     return refs
 
 
-def _status_code(exc: BaseException) -> int | None:
-    """HTTP status behind a client exception, whatever wrapper it arrived in."""
+def status_code_of(exc: BaseException) -> int | None:
+    """HTTP status behind a client exception, whatever wrapper it arrived in.
+
+    Public because `ingest.tracking` needs the same test: `ingest` reaches the
+    API through a Protocol and must not import the concrete error classes, so
+    "was this a 404" is asked by status code rather than by `isinstance`.
+    """
     code = getattr(exc, "status_code", None)
     if isinstance(code, int):
         return code
@@ -180,7 +185,7 @@ async def _poll_batch(ctx: IngestContext, batch: Sequence[DuePlayer], report: Po
         payload = await ctx.api.get_players_by_names(names)
     # Broad on purpose: one bad batch must not stop the cycle.
     except Exception as exc:
-        if _status_code(exc) == 404 and len(batch) > 1:
+        if status_code_of(exc) == 404 and len(batch) > 1:
             # An unknown name 404s the ENTIRE batch, so one renamed account
             # would otherwise blind us to its nine batch-mates forever. Binary
             # split to isolate the offender: O(k log n) extra requests rather

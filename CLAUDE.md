@@ -298,6 +298,20 @@ passed on a decoder that could not read a single bundle in the archive,
 because none of them execute it — that is what `npm test` is now for, and why
 the decoder has a corpus test as well as a synthetic one.
 
+**`players` is not a list of tracked players.** It holds a row per human
+opponent too (4,338 of 4,341 rows are untracked and never were tracked), which
+is what makes opponent lookup and aggregate heatmaps free. "Players I stopped
+tracking" is `untracked_at IS NOT NULL`, exposed as
+`GET /players?formerlyTracked=true` — never `tracked = false`.
+
+**An unknown player name 404s**, and the client's generic 404 text says
+"unknown resource, or outside the 14-day retention window" — a true sentence
+about matches and a misleading one about a name. `ingest/tracking.py` converts
+any 404 into `PlayerNameNotResolved` so the answer names the real causes: PUBG's
+name lookup is **case-sensitive**, or the account is on another shard. Two
+different exception classes carry that same 404, so test the status code, not
+the type.
+
 **An `<img>` is natively draggable, which silently kills a pan gesture.**
 Pressing a map tile starts an HTML5 image drag: the browser fires
 `pointercancel`, the pointer stream stops, and the user drags a ghost thumbnail

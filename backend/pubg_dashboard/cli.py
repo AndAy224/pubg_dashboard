@@ -457,6 +457,14 @@ async def _track(names: Sequence[str], shard: str, *, needed_for: str) -> TrackR
     report = TrackReport([TrackResult(name=n, status="not found") for n in missing])
 
     resolved_lower: set[str] = set()
+    # The state machine lives in `ingest.tracking` so this and the Settings page
+    # cannot drift on the parts that matter — the rename rule, resetting the
+    # poll-failure backoff, and the backfill dedupe key.
+    apply_track = _symbol(
+        _import("pubg_dashboard.ingest.tracking", needed_for=needed_for),
+        "apply_track",
+        needed_for=needed_for,
+    )
     async with _session() as session:
         for raw in found:
             account_id, canonical, match_ids = _unpack_player(raw)
@@ -465,44 +473,18 @@ async def _track(names: Sequence[str], shard: str, *, needed_for: str) -> TrackR
                 continue
             resolved_lower.add(canonical.lower())
 
-            player = await session.get(Player, account_id)
-            if player is None:
-                player = Player(account_id=account_id, name=canonical, shard=shard, tracked=True)
-                session.add(player)
-                status = "added"
-            else:
-                status = "already tracked" if player.tracked else "re-tracked"
-                # PUBG names are mutable; the account id is the stable key, so a
-                # rename shows up here as a name change on an existing row.
-                player.name = canonical
-                player.shard = shard
-                player.tracked = True
-                # A previously failing name that resolves again starts clean, or
-                # the poller's backoff keeps punishing it for old failures.
-                player.last_poll_error = None
-                player.consecutive_poll_failures = 0
-
-            queued = await _enqueue(
-                session,
-                kind="backfill_player",
-                # The match ids came free with the name resolution we already
-                # paid a token for; handing them over saves the backfill job a
-                # second /players call.
-                payload={
-                    "account_id": account_id,
-                    "shard": shard,
-                    "name": canonical,
-                    "match_ids": match_ids,
-                },
-                key=_dedupe_key("backfill_player", account_id),
-            )
+            outcome = await apply_track(session, account_id, name=canonical, shard=shard)
             report.results.append(
                 TrackResult(
-                    name=canonical,
-                    status=status,
-                    account_id=account_id,
+                    name=outcome.name,
+                    status=outcome.status,
+                    account_id=outcome.account_id,
+                    # Reported for context only. `backfill_player` deliberately
+                    # re-resolves by account id rather than trusting these: ids
+                    # survive a rename, and matches played between the add and
+                    # the worker picking the job up would be missed.
                     match_ids=len(match_ids),
-                    queued=queued,
+                    queued=outcome.backfill_queued,
                 )
             )
         await session.commit()
@@ -553,10 +535,16 @@ async def _player_remove(name: str) -> None:
     async with _session() as session:
         # Case-insensitive on purpose: untracking is not destructive, and it uses
         # the ix_players_name_lower index. Matches the `lower(name)` index shape.
+        #
+        # `untracked_at` is stamped here as well as in `ingest.tracking.untrack`
+        # — it is what lets Settings offer a free re-track without listing the
+        # thousands of opponents that also have `players` rows, and a player
+        # removed from the CLI must be just as re-trackable as one removed from
+        # the UI.
         stmt = (
             update(Player)
             .where(func.lower(Player.name) == name.lower(), Player.tracked)
-            .values(tracked=False)
+            .values(tracked=False, untracked_at=utcnow())
             .returning(Player.name, Player.account_id)
         )
         rows = (await session.execute(stmt)).all()

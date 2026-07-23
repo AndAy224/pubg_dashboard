@@ -11,18 +11,23 @@ import base64
 import gzip
 import re
 from array import array
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
+from types import SimpleNamespace
+from typing import Any
+from unittest import mock
 
 import httpx
 import msgpack
 import pytest
 import pytest_asyncio
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import SQLAlchemyError
 
 from pubg_dashboard.api.app import create_app
-from pubg_dashboard.db.models import Match, Player
+from pubg_dashboard.db.models import Job, Match, Participant, Player
 from pubg_dashboard.db.session import dispose_engine, get_session
+from pubg_dashboard.ingest.ports import PubgApi
+from pubg_dashboard.pubg.errors import PlayerNotFound, PubgApiError
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -132,6 +137,260 @@ async def test_player_list_and_search(client: httpx.AsyncClient) -> None:
     name = tracked[0]["name"]
     hits = (await client.get("/api/players", params={"q": name.lower()})).json()
     assert any(p["name"] == name for p in hits), "search must be case-insensitive"
+
+
+# ---------------------------------------------------------------------------
+# tracking
+#
+# These mutate `players.tracked`, so each restores what it changed. They never
+# touch the network: `track_by_name` reaches the PUBG API through the `PubgApi`
+# Protocol, which a four-method stand-in satisfies. The payload shape is not
+# invented here — it is fed through `parse_players_payload`, the same
+# corpus-verified reader the poller uses, so the wire contract stays asserted in
+# one place rather than being re-guessed in a fixture.
+# ---------------------------------------------------------------------------
+
+
+class _FakePubg:
+    """Stands in for `PubgApi`. Records calls so a test can prove none happened."""
+
+    shard = "steam"
+
+    def __init__(self, players: list[tuple[str, str]] | None = None) -> None:
+        self.players = players or []
+        self.name_calls: list[list[str]] = []
+
+    async def get_players_by_names(self, names: Sequence[str]) -> dict[str, Any]:
+        self.name_calls.append(list(names))
+        wanted = set(names)
+        return {
+            "data": [
+                {
+                    "id": account_id,
+                    "attributes": {"name": name},
+                    "relationships": {"matches": {"data": []}},
+                }
+                for account_id, name in self.players
+                if name in wanted
+            ]
+        }
+
+    async def get_players_by_ids(self, account_ids: Sequence[str]) -> dict[str, Any]:
+        raise AssertionError("not expected in these tests")
+
+    async def get_match(self, match_id: str) -> dict[str, Any]:
+        raise AssertionError("not expected in these tests")
+
+    async def download_telemetry(self, url: str) -> bytes:
+        raise AssertionError("not expected in these tests")
+
+    async def aclose(self) -> None:
+        return None
+
+
+def test_the_fake_satisfies_the_real_port() -> None:
+    """Otherwise these tests prove something about a shape nothing else uses."""
+    assert isinstance(_FakePubg(), PubgApi)
+
+
+async def test_untracking_stops_polling_without_deleting_anything() -> None:
+    """The promise the UI makes: history is kept.
+
+    Asserted on the actual row counts, because "we only set a flag" is exactly
+    the kind of claim that stays true right up until someone adds a cascade.
+    """
+    if not await _database_reachable():
+        pytest.skip("no database reachable")
+
+    async with get_session() as session:
+        account_id = await session.scalar(select(Player.account_id).where(Player.tracked).limit(1))
+        if not account_id:
+            pytest.skip("no tracked players")
+        before = await session.scalar(
+            select(func.count()).select_from(Participant).where(
+                Participant.account_id == account_id
+            )
+        )
+
+    app = create_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        try:
+            r = await client.post(f"/api/players/{account_id}/untrack")
+            assert r.status_code == 200
+            assert r.json()["tracked"] is False
+
+            # Gone from the tracked list, present in the formerly-tracked one.
+            tracked = (await client.get("/api/players", params={"tracked": True})).json()
+            assert account_id not in [p["accountId"] for p in tracked]
+            formerly = (
+                await client.get("/api/players", params={"formerlyTracked": True})
+            ).json()
+            assert account_id in [p["accountId"] for p in formerly]
+            assert all(p["untrackedAt"] for p in formerly)
+
+            # The history is untouched and still queryable.
+            async with get_session() as session:
+                after = await session.scalar(
+                    select(func.count()).select_from(Participant).where(
+                        Participant.account_id == account_id
+                    )
+                )
+            assert after == before
+            assert (await client.get(f"/api/players/{account_id}/stats")).status_code == 200
+
+            # Re-tracking by id spends no API budget — there is no client to
+            # spend it with, so a call would raise rather than pass quietly.
+            r = await client.post(f"/api/players/{account_id}/track")
+            assert r.status_code == 200
+            assert r.json()["status"] == "re-tracked"
+            tracked = (await client.get("/api/players", params={"tracked": True})).json()
+            assert account_id in [p["accountId"] for p in tracked]
+        finally:
+            # Leave the roster as it was found, whatever failed above.
+            async with get_session() as session:
+                await session.execute(
+                    update(Player)
+                    .where(Player.account_id == account_id)
+                    .values(tracked=True, untracked_at=None)
+                )
+                await session.commit()
+
+
+async def test_formerly_tracked_is_not_merely_untracked() -> None:
+    """`tracked=false` is 4,338 opponents; `formerlyTracked` is the 0-3 that matter.
+
+    `players` holds a row per human opponent as well, which is what makes
+    opponent lookup and aggregate heatmaps free — so a UI listing "untracked
+    players" without this distinction would render every stranger who has ever
+    been in a lobby.
+    """
+    if not await _database_reachable():
+        pytest.skip("no database reachable")
+
+    app = create_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        untracked = (
+            await client.get("/api/players", params={"tracked": False, "limit": 200})
+        ).json()
+        formerly = (
+            await client.get("/api/players", params={"formerlyTracked": True, "limit": 200})
+        ).json()
+
+    assert len(untracked) > len(formerly), "opponents must not be offered as re-trackable"
+    assert all(p["untrackedAt"] is not None for p in formerly)
+    assert all(p["tracked"] is False for p in formerly)
+
+
+class _Generic404Pubg(_FakePubg):
+    """What `get_players_payload` really raises for an unknown name.
+
+    Observed in a browser against the live API. The first cut of this feature
+    assumed a 200 with an empty `data` array — which *also* happens — and let
+    the 404 through, so a mistyped name surfaced this generic message: "unknown
+    resource, or outside the 14-day retention window". True of a match, nonsense
+    about a player name, and it sends the reader to look at retention instead of
+    at their keyboard.
+    """
+
+    async def get_players_by_names(self, names: Sequence[str]) -> dict[str, Any]:
+        self.name_calls.append(list(names))
+        raise PubgApiError(
+            "PUBG returned 404 — unknown resource, or outside the 14-day "
+            "retention window",
+            status_code=404,
+        )
+
+
+class _TypedNotFoundPubg(_FakePubg):
+    """The typed variant the name-probing path raises. Same 404, different class.
+
+    Which is why `tracking` asks `status_code_of(exc) == 404` rather than
+    `isinstance` — `ingest` reaches the API through a Protocol and importing the
+    concrete error classes would defeat the seam, and there are two of them.
+    """
+
+    async def get_players_by_names(self, names: Sequence[str]) -> dict[str, Any]:
+        self.name_calls.append(list(names))
+        raise PlayerNotFound(list(names), kind="name", shard="steam")
+
+
+@pytest.mark.parametrize(
+    "api_factory", [_FakePubg, _Generic404Pubg, _TypedNotFoundPubg]
+)
+async def test_an_unresolvable_name_says_why_it_failed_however_pubg_says_no(
+    api_factory: type[_FakePubg],
+) -> None:
+    """Every shape of "no such name" must reach the same explanation.
+
+    Empty `data`, a generic 404 and a typed 404 all mean the operator typed
+    something PUBG does not recognise, and the useful thing to say is the same.
+    """
+    if not await _database_reachable():
+        pytest.skip("no database reachable")
+
+    fake = api_factory()
+    transport = httpx.ASGITransport(app=create_app())
+    with mock.patch(
+        "pubg_dashboard.api.routers.players.build_context",
+        return_value=SimpleNamespace(api=fake),
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.post("/api/players/track", params={"name": "nosuchplayer"})
+
+    assert r.status_code == 404, r.text
+    detail = r.json()["detail"].lower()
+    assert "case-sensitive" in detail
+    assert "shard" in detail
+    assert "retention" not in detail, "the retention message is about matches, not names"
+
+
+async def test_tracking_a_name_is_idempotent() -> None:
+    """Clicking twice must not create a second player or a duplicate job."""
+    if not await _database_reachable():
+        pytest.skip("no database reachable")
+
+    async with get_session() as session:
+        row = (
+            await session.execute(
+                select(Player.account_id, Player.name).where(Player.tracked).limit(1)
+            )
+        ).first()
+        if row is None:
+            pytest.skip("no tracked players")
+        account_id, name = row
+
+    fake = _FakePubg(players=[(account_id, name)])
+    app = create_app()
+    transport = httpx.ASGITransport(app=app)
+    with mock.patch(
+        "pubg_dashboard.api.routers.players.build_context",
+        return_value=SimpleNamespace(api=fake),
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            first = await client.post("/api/players/track", params={"name": name})
+            second = await client.post("/api/players/track", params={"name": name})
+
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert second.json()["status"] == "already tracked"
+    assert second.json()["accountId"] == account_id
+
+    async with get_session() as session:
+        rows = await session.scalar(
+            select(func.count()).select_from(Player).where(Player.account_id == account_id)
+        )
+        live = await session.scalar(
+            select(func.count())
+            .select_from(Job)
+            .where(
+                Job.dedupe_key == f"backfill_player:{account_id}",
+                Job.state.in_(("pending", "running")),
+            )
+        )
+    assert rows == 1
+    assert live <= 1, "the live-job dedupe index is what prevents a double click queueing twice"
 
 
 async def test_stats_report_both_kill_figures_honestly(

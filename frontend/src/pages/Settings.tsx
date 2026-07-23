@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router'
-import { get, post } from '../api/client'
+import { ApiError, get, post } from '../api/client'
 import type { Health, IngestStatus, PlayerCard } from '../api/types'
 import { Tile } from '../components/ui'
 import { ago, dateTime, duration, num } from '../lib/format'
@@ -29,9 +29,24 @@ export function Settings() {
     if (players.data) registerPlayers(players.data.map((p) => p.accountId))
   }, [players.data])
 
+  // Players tracking was deliberately turned off for — **not** `tracked=false`,
+  // which is thousands of opponents who were never tracked at all.
+  const formerly = useQuery({
+    queryKey: ['players', 'formerlyTracked'],
+    queryFn: () => get<PlayerCard[]>('/players', { formerlyTracked: true, limit: 200 }),
+  })
+
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ['ingest'] })
     qc.invalidateQueries({ queryKey: ['health'] })
+  }
+
+  // Six components subscribe to ['players', 'tracked'] — the nav, heatmaps,
+  // matches, compare and the replay as well as this page — so invalidating the
+  // key is what makes a new player appear everywhere without a reload.
+  const rosterChanged = () => {
+    qc.invalidateQueries({ queryKey: ['players'] })
+    refresh()
   }
 
   const backfill = useMutation({
@@ -45,6 +60,45 @@ export function Settings() {
       refresh()
     },
     onError: (e: Error) => setNote(`backfill failed: ${e.message}`),
+  })
+
+  const [addName, setAddName] = useState('')
+
+  const track = useMutation({
+    mutationFn: (name: string) =>
+      post<{ name: string; status: string; backfillQueued: boolean }>('/players/track', {
+        name,
+      }),
+    onSuccess: (r) => {
+      setAddName('')
+      setNote(
+        `${r.status}: ${r.name}` +
+          (r.backfillQueued ? ' — backfill queued' : ' — backfill already queued'),
+      )
+      rosterChanged()
+    },
+    // The server's `detail` carries the case-sensitivity explanation, which is
+    // the whole value of this message.
+    onError: (e: Error) => setNote(e instanceof ApiError ? e.detail : e.message),
+  })
+
+  const retrack = useMutation({
+    mutationFn: (accountId: string) =>
+      post<{ name: string; status: string }>(`/players/${accountId}/track`),
+    onSuccess: (r) => {
+      setNote(`${r.status}: ${r.name} — no rate-limit budget spent`)
+      rosterChanged()
+    },
+    onError: (e: Error) => setNote(e instanceof ApiError ? e.detail : e.message),
+  })
+
+  const untrack = useMutation({
+    mutationFn: (accountId: string) => post<{ name: string }>(`/players/${accountId}/untrack`),
+    onSuccess: (r) => {
+      setNote(`stopped tracking ${r.name} — their history is kept`)
+      rosterChanged()
+    },
+    onError: (e: Error) => setNote(e instanceof ApiError ? e.detail : e.message),
   })
 
   const reparse = useMutation({
@@ -122,6 +176,13 @@ export function Settings() {
                       disabled={backfill.isPending}
                     >
                       backfill
+                    </button>{' '}
+                    <button
+                      onClick={() => untrack.mutate(p.accountId)}
+                      disabled={untrack.isPending}
+                      title="stop polling; keeps every match already archived"
+                    >
+                      untrack
                     </button>
                   </td>
                 </tr>
@@ -129,7 +190,76 @@ export function Settings() {
             </tbody>
           </table>
         </div>
+
+        <form
+          className="row add-player"
+          onSubmit={(e) => {
+            e.preventDefault()
+            const name = addName.trim()
+            if (name) track.mutate(name)
+          }}
+        >
+          <input
+            value={addName}
+            onChange={(e) => setAddName(e.target.value)}
+            placeholder="exact in-game name"
+            aria-label="player name to track"
+            spellCheck={false}
+            autoCapitalize="none"
+            autoCorrect="off"
+          />
+          <button type="submit" disabled={track.isPending || !addName.trim()}>
+            {track.isPending ? 'resolving…' : 'track player'}
+          </button>
+          {/* Stated up front, not only in the error. It is the single most
+              common reason a lookup fails, and it costs a rate-limit token to
+              find out the hard way. */}
+          <span className="faint small">
+            names are <strong>CASE-SENSITIVE</strong> · costs one rate-limit token
+          </span>
+        </form>
       </section>
+
+      {formerly.data && formerly.data.length > 0 && (
+        <section className="card">
+          <div className="row" style={{ marginBottom: 10 }}>
+            <h3>Not tracked</h3>
+            <div className="spacer" />
+            <span className="faint small">
+              history is kept, and re-tracking costs nothing — the account id is
+              already known, so no name lookup is needed
+            </span>
+          </div>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th><th>Shard</th><th className="r">Matches</th>
+                  <th className="r">Untracked</th><th />
+                </tr>
+              </thead>
+              <tbody>
+                {formerly.data.map((p) => (
+                  <tr key={p.accountId}>
+                    <td><Link to={`/players/${p.accountId}`}>{p.name}</Link></td>
+                    <td className="dim">{p.shard}</td>
+                    <td className="r num">{p.matches}</td>
+                    <td className="r dim">{ago(p.untrackedAt)}</td>
+                    <td className="r">
+                      <button
+                        onClick={() => retrack.mutate(p.accountId)}
+                        disabled={retrack.isPending}
+                      >
+                        re-track
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
 
       <section className="card">
         <div className="row" style={{ marginBottom: 10 }}>
