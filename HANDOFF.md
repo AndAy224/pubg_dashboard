@@ -563,7 +563,33 @@ detail silently defeated the first attempt at the fix.
   missing) from a client-side throw (prints the real error), and separately
   reports missing map tiles instead of rendering dots on a void.
 
-### Still open
+### Closed: the frontend now has tests
 
-A frontend test runner. One vitest case building a msgpack payload with
-deliberately odd offsets would pin this permanently and needs no corpus.
+**vitest, node environment, no jsdom** — deliberately. Every bug this
+frontend has actually shipped lived in a pure function, so jsdom would buy
+brittle render tests and a large dependency for a class of bug this codebase
+does not have. `npm test`, or `npm run check` for typecheck + lint + test.
+
+32 tests over the decoder, the identity-colour/placement logic and the
+formatters. Two layers, matching the backend's split:
+
+* `replayBundle.test.ts` — hermetic. Encodes bundles with a padding string
+  whose length walks every section through both byte parities, which is
+  exactly how real alignment ends up being a function of match data. Also
+  pins the big-endian refusal, the dictionary fallback, and that a realigning
+  copy does not alias two sections onto each other.
+* `replayBundle.corpus.test.ts` — decodes **real** bundles from the running
+  API and **skips cleanly when it is absent** (`PUBGD_API_BASE` to redirect),
+  the same convention `tests/conftest.py` uses for Postgres. Checks the CSR
+  offset array covers the position arrays exactly, that per-player tick
+  cursors never go backwards, that health never exceeds 100, and that the
+  bundle's kill count equals `kill_events` — the two being separate outputs
+  of one parse, so disagreement means one is being read wrong.
+
+**Verified to catch the bug**: reverting the alignment fix fails 9 tests,
+including all 3 corpus tests. A regression test that does not fail on the
+regression is worth nothing, so this was checked rather than assumed.
+
+One unrelated inconsistency surfaced while writing them: `duration()`
+zero-padded seconds but not minutes, so "1h 0m" misaligned against "1h 30m"
+in the `tabular-nums` columns. Fixed.

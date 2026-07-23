@@ -9,7 +9,12 @@ export function duration(seconds: number | null | undefined): string {
   if (!seconds && seconds !== 0) return '—'
   const s = Math.max(0, Math.round(seconds))
   const m = Math.floor(s / 60)
-  return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}m ${String(s % 60).padStart(2, '0')}s`
+  // Both trailing units are zero-padded so the strings stay the same width in
+  // a `tabular-nums` column — "1h 0m" against "1h 30m" shifts the whole
+  // column by a character.
+  return m >= 60
+    ? `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`
+    : `${m}m ${String(s % 60).padStart(2, '0')}s`
 }
 
 export function distance(metres: number | null | undefined): string {

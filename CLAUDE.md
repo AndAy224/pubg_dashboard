@@ -66,7 +66,16 @@ npm run dev          # :5173, proxies /api to :8000
 npm run build        # tsc -b && vite build  -> dist/, which the API serves
 npm run typecheck
 npm run lint         # oxlint
+npm test             # vitest run
+npm run check        # typecheck + lint + test, the whole gate
 ```
+
+Frontend tests are **vitest in a node environment, no jsdom**: every bug this
+frontend has actually shipped lived in a pure function, not in markup.
+`src/lib/*.test.ts` are hermetic; `replayBundle.corpus.test.ts` decodes real
+bundles from a running API and **skips cleanly when it is absent**, mirroring
+the backend's convention — so a source-only checkout stays green. Point it
+elsewhere with `PUBGD_API_BASE`.
 
 `ruff` and both frontend checks pass. **`mypy` does not** — it is configured
 `strict = true` but the codebase has never satisfied it (currently 18 errors,
@@ -234,9 +243,10 @@ same invented field names as the code. **Assert against the corpus**, as
 `tests/test_telemetry_combat.py` does: those tests skip cleanly when `data/`
 is absent, so they cost a source-only checkout nothing.
 
-**There is no frontend test runner**, which is why a decoder bug could break
-every replay in the archive without anything going red. `tsc`, `oxlint` and
-`npm run build` all pass on a bundle nothing can read.
+The same rule holds on the frontend. `tsc`, `oxlint` and `npm run build` all
+passed on a decoder that could not read a single bundle in the archive,
+because none of them execute it — that is what `npm test` is now for, and why
+the decoder has a corpus test as well as a synthetic one.
 
 ## Error messages must not name a cause they have not checked
 
