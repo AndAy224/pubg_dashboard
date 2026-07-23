@@ -777,3 +777,36 @@ node scripts/probe-replay.mjs <matchId> --t=600 --shot=/tmp/replay.png
 real WebGL with no GPU. WebGPU is unavailable and logs "No available
 adapters"; Pixi falls back to WebGL on its own, so that warning is expected
 and harmless.
+
+---
+
+## 18. Blurry map, anonymous dots — fixed 2026-07-23
+
+**The tile level was three steps too low.** `onZoom` chose it with
+`ceil(log2(scale * 2))`, which accounts for neither the tile size nor the
+device pixel ratio. At fit on a 900px canvas that picks level 0 — a single
+512px tile stretched over 900 CSS pixels, or 1800 on a retina display. The
+tiles were always fine; the wrong one was being asked for.
+
+Level z is a 2^z grid of `tilePx` tiles, so the map is `tilePx * 2^z` pixels
+and covers `worldPx * scale * dpr` device pixels. The level is now
+`ceil(log2(worldPx * scale * dpr / tilePx))`, and `tilePx` is threaded through
+from the manifest. Verified with the headless probe: dpr 1 requests level 1
+(4 tiles), dpr 2 requests level 2 (16 tiles), both ~1.14x the displayed
+resolution.
+
+**Dots had no identity.** Every tracked player rendered the same flat white,
+so on a hundred-dot map you could see that one of your squad was there but
+never which one. They now wear their **identity colour** — the same hue as
+their nav entry, match-feed chip and trend line — plus a white ring, and a
+name label. Untracked players get a label once you zoom past `LABEL_SCALE`;
+below that a hundred names overlap into noise. Labels are counter-scaled by
+`1/viewport.scale` so they stay a constant size, and built lazily, since a
+hundred `Text` objects up front is a hundred canvas rasterisations that mostly
+never show. The team list shows the same coloured dot beside each tracked
+name.
+
+Note `registerPlayers` is called **during render** in `Replay.tsx`, not in an
+effect: the replay route mounts outside `AppShell` (which registers the
+palette everywhere else), and child effects run before parent effects, so
+`ReplayCanvas` would otherwise build its dots before the colours existed.

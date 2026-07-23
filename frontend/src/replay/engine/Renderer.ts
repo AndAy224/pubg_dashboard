@@ -1,7 +1,8 @@
-import { Application, Assets, Container, Graphics, Sprite, Texture } from 'pixi.js'
+import { Application, Assets, Container, Graphics, Sprite, Text, Texture } from 'pixi.js'
 import type { ReplayBundle } from '../../lib/replayBundle'
 import { FLAG_ALIVE, FLAG_DBNO, FLAG_IN_VEHICLE, NULL_PLAYER } from '../../lib/replayBundle'
-import { BOT_COLOUR, TRACKED_COLOUR, teamColour } from '../../lib/palette'
+import { BOT_COLOUR, teamColour } from '../../lib/palette'
+import { playerColourInt } from '../../lib/players'
 import { Viewport } from './Viewport'
 import { publish } from '../store'
 
@@ -18,11 +19,18 @@ import { publish } from '../store'
 
 const DOT_R = 5
 
+/** Below this viewport scale every name at once is unreadable clutter, so only
+ *  the tracked players and whoever is being followed keep a label. */
+const LABEL_SCALE = 0.55
+
 interface Options {
   bundle: ReplayBundle
   tileBase: string
   mapName: string
   sourcePx: number
+  /** Edge length of one tile in the pyramid. Needed to choose a level whose
+   *  resolution matches the display; without it the map renders blurred. */
+  tilePx: number
   imageScale: number
   maxZoom: number
   tracked: Set<string>
@@ -39,9 +47,14 @@ export class Renderer {
   private readonly trailLayer = new Graphics()
   private readonly worldLayer = new Container()
   private readonly dotLayer = new Container()
+  private readonly labelLayer = new Container()
   private readonly fxLayer = new Container()
 
   private readonly dots: Sprite[] = []
+  private readonly rings: Graphics[] = []
+  /** Built lazily — a hundred `Text` objects up front is a hundred canvas
+   *  rasterisations, and most are never shown. */
+  private readonly labels: (Text | null)[] = []
   /** Monotonic per-player cursor into the CSR arrays — the hot loop's state. */
   private readonly cursor: Int32Array
   private readonly worldPx: number
@@ -73,6 +86,7 @@ export class Renderer {
       this.zoneLayer,
       this.worldLayer,
       this.dotLayer,
+      this.labelLayer,
       this.fxLayer,
     )
     app.stage.addChild(this.world)
@@ -124,18 +138,53 @@ export class Renderer {
       s.anchor.set(0.5)
       s.width = DOT_R * 2
       s.height = DOT_R * 2
-      // Bots render dimmed: they are up to 93% of a TPP squad lobby, and a
-      // hundred equally-bright dots is unreadable.
+      // Tracked players wear their **identity colour** — the same hue as their
+      // nav entry, their match-feed chip and their trend line. They were all
+      // rendered the same flat white, so on a hundred-dot map you could tell
+      // that one of your squad was there but never which one.
       s.tint = p.b
         ? BOT_COLOUR
         : this.opts.tracked.has(p.a)
-          ? TRACKED_COLOUR
+          ? playerColourInt(p.a)
           : teamColour(p.t)
       s.alpha = p.b ? 0.45 : 1
       s.visible = false
       this.dots.push(s)
       this.dotLayer.addChild(s)
+
+      // A ring around the tracked players, so they are findable by shape as
+      // well as by hue — three colours in a crowd is still a hunt.
+      const ring = new Graphics()
+      if (!p.b && this.opts.tracked.has(p.a)) {
+        ring.circle(0, 0, DOT_R + 3).stroke({ width: 2, color: 0xffffff, alpha: 0.9 })
+      }
+      ring.visible = false
+      this.rings.push(ring)
+      this.dotLayer.addChild(ring)
     }
+  }
+
+  /** The name tag for one player, created on first use. */
+  private label(p: number): Text {
+    const existing = this.labels[p]
+    if (existing) return existing
+    const player = this.opts.bundle.players[p]!
+    const t = new Text({
+      text: player.n,
+      style: {
+        fontFamily: 'system-ui, sans-serif',
+        fontSize: 12,
+        fill: this.opts.tracked.has(player.a) ? playerColourInt(player.a) : 0xffffff,
+        // An outline rather than a background: names sit over satellite
+        // imagery that is light in the towns and dark in the water.
+        stroke: { color: 0x000000, width: 3 },
+      },
+    })
+    t.anchor.set(0.5, 1)
+    t.visible = false
+    this.labels[p] = t
+    this.labelLayer.addChild(t)
+    return t
   }
 
   /** Swap the tile pyramid level to match the current zoom. */
@@ -151,9 +200,23 @@ export class Renderer {
       return
     }
 
+    // Pick the level whose pyramid has at least as many pixels as the map
+    // occupies on the physical display.
+    //
+    // Level z is a 2^z grid of `tilePx` tiles, so the whole map is
+    // `tilePx * 2^z` pixels; on screen it covers `worldPx * scale * dpr`
+    // device pixels. Solving for z gives the log below.
+    //
+    // This used to be `ceil(log2(scale * 2))`, which accounts for neither the
+    // tile size nor the device pixel ratio and lands **three levels low**: at
+    // fit on a 900px canvas it chose level 0, stretching a single 512px tile
+    // over 900 CSS pixels (1800 on a retina display). That is the blur — the
+    // tiles were always fine, the wrong one was being asked for.
+    const dpr = Math.max(1, globalThis.devicePixelRatio || 1)
+    const needed = (this.worldPx * scale * dpr) / this.opts.tilePx
     const wanted = Math.max(
       0,
-      Math.min(this.opts.maxZoom, Math.ceil(Math.log2(Math.max(scale, 0.001) * 2))),
+      Math.min(this.opts.maxZoom, Math.ceil(Math.log2(Math.max(needed, 1)))),
     )
     if (wanted === this.tileLevel) return
     this.tileLevel = wanted
@@ -253,8 +316,12 @@ export class Renderer {
       const start = b.pos.off[p]!
       const end = b.pos.off[p + 1]!
       const dot = this.dots[p]!
+      const ring = this.rings[p]!
+      const existingLabel = this.labels[p]
       if (start === end) {
         dot.visible = false
+        ring.visible = false
+        if (existingLabel) existingLabel.visible = false
         continue
       }
 
@@ -267,6 +334,8 @@ export class Renderer {
       if (t0 > tick) {
         // Player has not appeared yet.
         dot.visible = false
+        ring.visible = false
+        if (existingLabel) existingLabel.visible = false
         continue
       }
 
@@ -287,7 +356,11 @@ export class Renderer {
       const flags = b.pos.flags[c]!
       const isAlive = (flags & FLAG_ALIVE) !== 0
       dot.visible = isAlive
-      if (!isAlive) continue
+      if (!isAlive) {
+        ring.visible = false
+        if (existingLabel) existingLabel.visible = false
+        continue
+      }
       alive++
 
       dot.position.set(x, y)
@@ -297,7 +370,32 @@ export class Renderer {
       dot.width = DOT_R * 2 * scale
       dot.height = DOT_R * 2 * scale
 
-      if (this.viewport.isFollowing === p) {
+      const followed = this.viewport.isFollowing === p
+      const tracked = this.opts.tracked.has(b.players[p]!.a)
+
+      // Counter-scaled so markers stay a constant size on screen: they live in
+      // the world container, which is what zooming scales.
+      const inv = 1 / this.viewport.scale
+      ring.visible = tracked
+      if (tracked) {
+        ring.position.set(x, y)
+        ring.scale.set(inv)
+      }
+
+      // Everyone gets a name once you are zoomed in; before that only the
+      // people you came to watch, or a hundred labels overlap into noise.
+      const wantLabel =
+        !b.players[p]!.b && (tracked || followed || this.viewport.scale >= LABEL_SCALE)
+      if (wantLabel) {
+        const t = this.label(p)
+        t.visible = true
+        t.position.set(x, y - (DOT_R + 5) * inv)
+        t.scale.set(inv)
+      } else if (existingLabel) {
+        existingLabel.visible = false
+      }
+
+      if (followed) {
         followX = x
         followY = y
       }

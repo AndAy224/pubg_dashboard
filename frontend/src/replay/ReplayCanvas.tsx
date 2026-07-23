@@ -14,6 +14,7 @@ import { apiBase } from '../api/client'
 export function ReplayCanvas({
   bundle,
   sourcePx,
+  tilePx,
   imageScale,
   maxZoom,
   tracked,
@@ -22,6 +23,7 @@ export function ReplayCanvas({
 }: {
   bundle: ReplayBundle
   sourcePx: number
+  tilePx: number
   imageScale: number
   maxZoom: number
   tracked: Set<string>
@@ -61,6 +63,7 @@ export function ReplayCanvas({
         tileBase: `${apiBase}/tiles`,
         mapName: bundle.mapName,
         sourcePx,
+        tilePx,
         imageScale,
         maxZoom,
         tracked,
@@ -81,7 +84,7 @@ export function ReplayCanvas({
       renderer?.destroy()
       app?.destroy(true, { children: true, texture: true })
     }
-  }, [bundle, sourcePx, imageScale, maxZoom, tracked, onReady, onError])
+  }, [bundle, sourcePx, tilePx, imageScale, maxZoom, tracked, onReady, onError])
 
   return <div ref={holder} className="canvas-holder" />
 }

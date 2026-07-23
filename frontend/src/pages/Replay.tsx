@@ -7,6 +7,7 @@ import { decodeBundle, dictName, NULL_PLAYER } from '../lib/replayBundle'
 import type { ReplayBundle } from '../lib/replayBundle'
 import { duration, gameMode, weaponName } from '../lib/format'
 import { hex, teamColour, BOT_COLOUR } from '../lib/palette'
+import { playerColour, registerPlayers } from '../lib/players'
 import { ReplayCanvas } from '../replay/ReplayCanvas'
 import { Timeline } from '../replay/Timeline'
 import { InventoryPanel } from '../replay/Inventory'
@@ -38,10 +39,16 @@ export function Replay() {
     staleTime: Infinity, // immutable for a given parser version
   })
 
-  const tracked = useMemo(
-    () => new Set((players.data ?? []).map((p) => p.accountId)),
-    [players.data],
-  )
+  const tracked = useMemo(() => {
+    const ids = (players.data ?? []).map((p) => p.accountId)
+    // Registered during render rather than in an effect. This route mounts
+    // outside `AppShell`, which is what registers the palette everywhere else,
+    // and child effects run before parent effects — so `ReplayCanvas` would
+    // build its dots before the identity colours existed and tint the tracked
+    // players neutral grey.
+    registerPlayers(ids)
+    return new Set(ids)
+  }, [players.data])
 
   const bundle = bundleQuery.data
   const info = bundle ? tiles.data?.[bundle.mapName] : undefined
@@ -130,6 +137,7 @@ export function Replay() {
         <ReplayCanvas
           bundle={bundle}
           sourcePx={info.sourcePx}
+          tilePx={info.tilePx}
           imageScale={info.imageScale}
           maxZoom={info.maxZoom}
           tracked={tracked}
@@ -404,8 +412,12 @@ function TeamList({
               onClick={() => click(m.i)}
               title="follow"
             >
+              {/* Same hue as the dot on the map and the chip in the match
+                  feed — that is the whole point of a fixed identity colour. */}
+              {tracked.has(m.acct) && (
+                <span className="dot-id" style={{ background: playerColour(m.acct) }} />
+              )}
               {m.name}
-              {tracked.has(m.acct) && <span className="tag" style={{ marginLeft: 6 }}>tracked</span>}
             </button>
           ))}
         </div>

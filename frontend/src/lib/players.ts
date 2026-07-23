@@ -40,6 +40,11 @@ export function playerColourHex(accountId: string): string {
   return i < 0 ? '#97a3b4' : SLOT_HEX[i]!
 }
 
+/** The same colour as a 0xRRGGBB number, for Pixi tints. */
+export function playerColourInt(accountId: string): number {
+  return Number.parseInt(playerColourHex(accountId).slice(1), 16)
+}
+
 export function isTracked(accountId: string): boolean {
   return order.includes(accountId)
 }
