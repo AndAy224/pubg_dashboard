@@ -93,15 +93,21 @@ function MatchRow({ m }: { m: MatchFeedRow }) {
           {m.results.length === 0 && <span className="faint small">no tracked player</span>}
         </div>
 
+        {/* Every cell is rendered even when it has nothing to say. These are
+            fixed grid columns, and a conditionally-absent child would let the
+            ones after it slide into the wrong column — which is worse than
+            the ragged edge this replaced. */}
         <div className="feed-meta faint small">
-          {m.matchType !== 'official' && <span className="tag">{m.matchType}</span>}
-          {m.weatherId && <span>{m.weatherId}</span>}
+          <span>{m.matchType !== 'official' && <span className="tag">{m.matchType}</span>}</span>
+          <span>{m.weatherId}</span>
           <span className="num">{duration(m.durationS)}</span>
-          {m.botCount != null && m.botCount > 0 && (
-            <span title={`${m.botCount} bots of ${m.numStartPlayers ?? '?'} players`}>
-              {num(m.botCount)} bots
-            </span>
-          )}
+          <span
+            title={
+              m.botCount ? `${m.botCount} bots of ${m.numStartPlayers ?? '?'} players` : undefined
+            }
+          >
+            {m.botCount ? `${num(m.botCount)} bots` : ''}
+          </span>
         </div>
       </Link>
 

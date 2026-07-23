@@ -23,7 +23,26 @@
 
 .feed-players { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; }
 
-.feed-meta { display: flex; align-items: center; gap: 10px; justify-content: flex-end; }
+/**
+ * Fixed columns, because `auto` sizes to each row's own content.
+ *
+ * As a flex row this block was 94-243px wide depending on whether that match
+ * had a non-official type, weather, or bots — 8 distinct widths across 25
+ * rows, so the duration and bot counts landed somewhere different on almost
+ * every line and the right-hand edge read as ragged.
+ *
+ * Widths are measured, not guessed: the `tutorialatoz` tag is 78px, and the
+ * widest span is `31m 55s` at 54px. Cells clip rather than push, so a wider
+ * value in a future patch cannot quietly reintroduce the drift.
+ */
+.feed-meta {
+  display: grid; align-items: center; gap: 8px;
+  grid-template-columns: 80px 62px 58px 58px;
+  justify-items: end;
+}
+.feed-meta > * {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 
 .feed-actions { display: flex; align-items: center; padding-right: 8px; }
 .replay-btn {
@@ -42,6 +61,9 @@
   .feed-meta { display: none; }
 }
 @media (max-width: 720px) {
-  .feed-main { grid-template-columns: 44px 1fr auto; }
+  /* `auto` here, not 70px, left the placement column sized by each row's own
+     `#12/51` versus `#3/100` — five distinct geometries in one list, the same
+     defect the meta block had. */
+  .feed-main { grid-template-columns: 44px 1fr 70px; }
   .feed-players { display: none; }
 }
