@@ -23,6 +23,16 @@ const DOT_R = 5
  *  the tracked players and whoever is being followed keep a label. */
 const LABEL_SCALE = 0.55
 
+/**
+ * How long a combat tracer stays on screen, in **match** milliseconds.
+ *
+ * Deliberately match time, not wall-clock: at 20x the replay covers 20 s per
+ * real second, and a wall-clock fade would leave every tracer of the last
+ * several seconds of fighting on screen at once. Scaling with playback keeps
+ * the same *amount of combat* visible at every speed.
+ */
+const TRACER_MS = 1200
+
 interface Options {
   bundle: ReplayBundle
   tileBase: string
@@ -45,6 +55,7 @@ export class Renderer {
   private readonly gridLayer = new Container()
   private readonly zoneLayer = new Graphics()
   private readonly trailLayer = new Graphics()
+  private readonly tracerLayer = new Graphics()
   private readonly worldLayer = new Container()
   private readonly dotLayer = new Container()
   private readonly labelLayer = new Container()
@@ -61,6 +72,9 @@ export class Renderer {
   private viewport!: Viewport
   private tileLevel = -1
   private destroyed = false
+  /** Lower bound into `hits`, advanced monotonically like the position cursors. */
+  private hitCursor = 0
+  private _headShotIndex: number | undefined
 
   /** Playhead, in milliseconds since t0. A ref, never React state. */
   nowMs = 0
@@ -85,6 +99,9 @@ export class Renderer {
       this.trailLayer,
       this.zoneLayer,
       this.worldLayer,
+      // Above the world markers so a tracer is never hidden by a care package,
+      // below the dots so it never covers the people involved.
+      this.tracerLayer,
       this.dotLayer,
       this.labelLayer,
       this.fxLayer,
@@ -281,6 +298,8 @@ export class Renderer {
     if (clamped < this.nowMs) {
       this.resetCursors(clamped)
       this.trailLayer.clear()
+      // Monotonic like the position cursors, so a backwards seek invalidates it.
+      this.hitCursor = 0
     }
     this.nowMs = clamped
     this.drawFrame()
@@ -366,16 +385,21 @@ export class Renderer {
       dot.position.set(x, y)
       const dbno = (flags & FLAG_DBNO) !== 0
       dot.alpha = b.players[p]!.b ? 0.45 : dbno ? 0.5 : 1
-      const scale = (flags & FLAG_IN_VEHICLE) !== 0 ? 1.4 : 1
-      dot.width = DOT_R * 2 * scale
-      dot.height = DOT_R * 2 * scale
 
       const followed = this.viewport.isFollowing === p
       const tracked = this.opts.tracked.has(b.players[p]!.a)
 
       // Counter-scaled so markers stay a constant size on screen: they live in
       // the world container, which is what zooming scales.
+      //
+      // **The dots themselves were not**, and that is why nobody could tell
+      // them apart: `DOT_R * 2` is 10 *world* units, and at fit on Erangel the
+      // world is scaled to about 0.11, so a player rendered **1.1 pixels
+      // across**. They were not ambiguous, they were nearly invisible.
       const inv = 1 / this.viewport.scale
+      const size = DOT_R * 2 * ((flags & FLAG_IN_VEHICLE) !== 0 ? 1.4 : 1) * inv
+      dot.width = size
+      dot.height = size
       ring.visible = tracked
       if (tracked) {
         ring.position.set(x, y)
@@ -404,7 +428,101 @@ export class Renderer {
     if (this.viewport.isFollowing !== null) this.viewport.centreOn(followX, followY)
 
     this.drawZones(tick)
+    this.drawTracers(tick)
     publish({ nowMs: this.nowMs, alive, playing: this.playing, speed: this.speed })
+  }
+
+  /**
+   * Shots that landed, as fading lines from shooter to victim.
+   *
+   * This is what makes a fight legible: two dots near each other say nothing
+   * about who is shooting whom, and the kill feed only reports the last shot
+   * of an exchange.
+   *
+   * The window is scanned with a lower-bound cursor rather than filtering the
+   * whole array — a match has ~550 hits, which is cheap, but this runs every
+   * frame and the cursor makes it O(hits in window).
+   */
+  private drawTracers(tick: number): void {
+    const h = this.opts.bundle.hits
+    const g = this.tracerLayer
+    g.clear()
+    if (h.n === 0) return
+
+    const tickMs = this.opts.bundle.tickMs
+    const windowTicks = TRACER_MS / tickMs
+    const from = tick - windowTicks
+
+    // Advance the cursor to the first hit still inside the window. Reset on a
+    // backwards seek, exactly like the position cursors.
+    if (this.hitCursor > 0 && h.t[this.hitCursor - 1]! > from) this.hitCursor = 0
+    while (this.hitCursor < h.n && h.t[this.hitCursor]! < from) this.hitCursor++
+
+    const headShot = this.dmgReasonIndex('HeadShot')
+
+    for (let i = this.hitCursor; i < h.n; i++) {
+      const t = h.t[i]!
+      if (t > tick) break
+
+      // 1 at the moment of impact, 0 as it leaves the window.
+      const age = 1 - (tick - t) / windowTicks
+      if (age <= 0) continue
+
+      const ax = this.toWorld(h.ax[i]!)
+      const ay = this.toWorld(h.ay[i]!)
+      const vx = this.toWorld(h.vx[i]!)
+      const vy = this.toWorld(h.vy[i]!)
+
+      const attacker = this.opts.bundle.players[h.a[i]!]
+      const victim = this.opts.bundle.players[h.v[i]!]
+      const involvesTracked =
+        (attacker !== undefined && this.opts.tracked.has(attacker.a)) ||
+        (victim !== undefined && this.opts.tracked.has(victim.a))
+
+      const isHead = h.dr[i]! === headShot
+      const colour = isHead ? 0xff3b30 : involvesTracked ? 0xffd400 : 0xffffff
+      // Everything is divided by the viewport scale so it keeps a constant
+      // size on screen — these live in the world container, which zoom scales.
+      const inv = 1 / this.viewport.scale
+
+      // Damage drives thickness, so a body-shot burst reads differently from
+      // a grazing hit.
+      g.moveTo(ax, ay).lineTo(vx, vy).stroke({
+        width: (0.8 + (h.dmg[i]! / 100) * 2.2) * inv,
+        color: colour,
+        alpha: (involvesTracked ? 0.95 : 0.55) * age,
+      })
+
+      // **Both ends are marked, and that is not decoration.** Measured over
+      // the archive, 31% of hits land inside 15 m and 8% inside 5 m — a
+      // point-blank exchange draws a line a few pixels long, so the line alone
+      // cannot show that a fight is happening. The muzzle flash and the impact
+      // are a fixed size on screen, so a close-quarters burst still reads as
+      // two bright pulsing marks.
+      g.circle(ax, ay, 2.6 * inv).fill({ color: colour, alpha: 0.75 * age })
+
+      g.circle(vx, vy, (isHead ? 4.2 : 3.2) * inv).fill({
+        color: isHead ? 0xff3b30 : 0xffe066,
+        alpha: 0.95 * age,
+      })
+      // An expanding ring on the freshest hits, so a burst pulses rather than
+      // just brightening.
+      if (age > 0.55) {
+        g.circle(vx, vy, (5 + (1 - age) * 16) * inv).stroke({
+          width: 1.2 * inv,
+          color: isHead ? 0xff3b30 : 0xffe066,
+          alpha: (age - 0.55) * 1.6,
+        })
+      }
+    }
+  }
+
+  /** Index of a damage reason in the bundle's dictionary, resolved once. */
+  private dmgReasonIndex(name: string): number {
+    if (this._headShotIndex === undefined) {
+      this._headShotIndex = this.opts.bundle.dicts['dmgReason']?.indexOf(name) ?? -1
+    }
+    return this._headShotIndex
   }
 
   private drawZones(tick: number): void {

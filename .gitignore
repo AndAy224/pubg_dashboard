@@ -49,7 +49,12 @@ frontend/.vite/
 # --- Data (never commit telemetry or map assets) ---
 data/
 !data/.gitkeep
-telemetry/
+# **Anchored.** An unanchored `telemetry/` matches a directory of that name at
+# ANY depth, and it silently swallowed `backend/pubg_dashboard/telemetry/` —
+# the entire parser package, eleven files, never committed and never pushed.
+# The working tree was fine, `pytest` was green, and the repo on GitHub could
+# not run. A leading slash is the whole difference.
+/data/telemetry/
 *.telemetry.json
 *.telemetry.json.gz
 # Build output of scripts/fetch_map_assets.py — ~21 MB of webp tiles per two

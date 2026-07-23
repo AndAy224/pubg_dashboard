@@ -71,6 +71,12 @@ export function ReplayCanvas({
       })
       renderer.start()
       renderer.drawEvents()
+      // Deliberately global. Three replay bugs in a row were only findable by
+      // driving the live renderer from a headless browser
+      // (`scripts/probe-replay.mjs`), and a handle turns that from guesswork
+      // into two lines. This is a LAN dashboard for three people; the leak is
+      // a debugging affordance, not an attack surface.
+      ;(window as unknown as Record<string, unknown>).__replay = renderer
       onReady(renderer)
     })().catch((e: unknown) => {
       // Without this the whole init is a floating promise: any failure — WebGPU

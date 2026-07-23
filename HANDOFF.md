@@ -810,3 +810,81 @@ Note `registerPlayers` is called **during render** in `Replay.tsx`, not in an
 effect: the replay route mounts outside `AppShell` (which registers the
 palette everywhere else), and child effects run before parent effects, so
 `ReplayCanvas` would otherwise build its dots before the colours existed.
+
+---
+
+## 19. Combat tracers — added 2026-07-23
+
+"Show gunshots that hit players so we can see combat." `LogPlayerTakeDamage`
+is the only event carrying **both** the attacker's and the victim's position,
+which is exactly what a tracer needs.
+
+### Measured before building
+
+| | |
+|---|---:|
+| damage events per match | ~5,000 |
+| of which blue-zone (no attacker) | **63%** |
+| attributed combat hits per match | ~550 |
+| bundle cost | 126 KB -> **132 KB** gzipped |
+| median engagement distance | **26 m** |
+| hits under 15 m | **31%** |
+| hits under 5 m | 8% |
+
+Parser v4 emits a `hits` section as parallel typed arrays (`t, a, v, ax, ay,
+vx, vy, dmg, dr, w`), not the map-per-entry shape `_event_track` uses — this
+is an order of magnitude more entries. Blue-zone and self-damage are dropped
+at collection, and `_TRACER_TYPES` filters the rest so a tracer always means
+"someone shot someone".
+
+### The 31% is why both ends are marked
+
+A third of hits land inside 15 m, so at any sane zoom the *line* is a few
+pixels and cannot show that a fight is happening. Every marker is therefore
+divided by `viewport.scale` and keeps a **constant size on screen**: a muzzle
+flash at the shooter, a larger impact at the victim, an expanding ring on the
+freshest hits. A point-blank exchange still reads as two bright pulsing marks.
+Headshots are red; anything involving a tracked player is amber and brighter.
+
+`TRACER_MS` is **match** time, not wall-clock: at 20x the replay covers 20 s
+per real second, and a wall-clock fade would leave every tracer of the last
+several seconds on screen at once.
+
+### Dots were 1.1 pixels
+
+Found while checking this: `DOT_R * 2` is 10 **world** units, and the dot
+layer sits inside the scaled world container. At fit on Erangel the scale is
+~0.11, so a player rendered **1.1 pixels across**. "I don't know which dots
+are which" was not ambiguity, it was near-invisibility. Dots are now
+counter-scaled like every other marker.
+
+### Verifying this needed the renderer handle
+
+Four probe attempts showed no tracers and all four were the probe's fault —
+the camera was pointed somewhere else, or the moment was between bursts.
+`ReplayCanvas` now exposes `window.__replay`, and `drawTracers` was confirmed
+by reading live state (`drawn: 7` at tick 2900) *before* any screenshot
+matched. Then aiming the camera at the hit's own coordinates produced the
+picture. **Instrument first, screenshot second** — a blank screenshot proves
+nothing about the code.
+
+### The parser package was never in git
+
+Found while committing the above: `git status` showed no backend changes even
+though `combat.py` and `parse.py` had clearly been edited.
+
+`.gitignore` contained an **unanchored** `telemetry/`. That matches a
+directory of that name at *any* depth, so it silently swallowed
+`backend/pubg_dashboard/telemetry/` — the whole parser, eleven files, 2,954
+lines. It had never been committed and never pushed. The working tree was
+fine, `uv run pytest -q` was green against it, and the repository on GitHub
+could not have run.
+
+Fixed by anchoring the pattern to `/data/telemetry/`. A leading slash is the
+whole difference. A sweep of every source file in the tree confirmed this
+package was the only casualty.
+
+Worth internalising: this project's rule is "measure, do not assume", and
+`git status` being quiet was taken as "nothing to commit" for several
+sessions. `git ls-files <path>` answers the actual question — whether a file
+is tracked — and `git check-ignore -v <path>` names the offending line.

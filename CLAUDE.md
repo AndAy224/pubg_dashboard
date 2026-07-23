@@ -296,6 +296,16 @@ than one that says "failed" — it sends the reader somewhere else entirely.
 Distinguish the cases you can actually tell apart (a 404/409 from the server
 versus a client-side throw) and print the real error for the rest.
 
+## .gitignore patterns must be anchored
+
+An unanchored directory pattern matches at **any** depth. `telemetry/` in
+`.gitignore` silently excluded `backend/pubg_dashboard/telemetry/` — the whole
+parser package — from git for several sessions: working tree fine, tests
+green, the pushed repository unrunnable. It is now `/data/telemetry/`.
+
+`git status` staying quiet is not evidence a file is committed. `git ls-files
+<path>` answers that, and `git check-ignore -v <path>` names the line to blame.
+
 ## Migrations
 
 `alembic/env.py` lists partial and functional indexes in `HAND_MANAGED_INDEXES`

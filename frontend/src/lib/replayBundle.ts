@@ -120,6 +120,31 @@ export interface ReplayBundle {
     q: Uint16Array
     slot: Uint8Array
   }
+  /**
+   * Attributed hits — the combat tracers. **Both** endpoints, because a tracer
+   * is a line from shooter to victim, and `LogPlayerTakeDamage` is the only
+   * event carrying the two positions together.
+   *
+   * Sorted by `t`, so the renderer can walk it with a cursor like `pos`.
+   * Absent on bundles from parser versions before 4.
+   */
+  hits: {
+    n: number
+    t: Uint16Array
+    /** Player indices. */
+    a: Uint8Array
+    v: Uint8Array
+    /** Quantised positions, same scale as `pos`. */
+    ax: Uint16Array
+    ay: Uint16Array
+    vx: Uint16Array
+    vy: Uint16Array
+    /** Clamped into a byte; real damage caps at 100. */
+    dmg: Uint8Array
+    /** Index into `dicts.dmgReason` — HeadShot, TorsoShot, … */
+    dr: Uint8Array
+    w: Uint16Array
+  }
   dicts: Record<string, string[]>
 }
 
@@ -199,7 +224,38 @@ export function decodeBundle(raw: ArrayBuffer): ReplayBundle {
       q: u16(inv.q),
       slot: u8(inv.slot),
     },
+    // Parser versions before 4 have no `hits`. An empty section keeps every
+    // reader unconditional rather than sprinkling `?.` through the hot loop.
+    hits: d.hits
+      ? {
+          n: d.hits.n,
+          t: u16(d.hits.t),
+          a: u8(d.hits.a),
+          v: u8(d.hits.v),
+          ax: u16(d.hits.ax),
+          ay: u16(d.hits.ay),
+          vx: u16(d.hits.vx),
+          vy: u16(d.hits.vy),
+          dmg: u8(d.hits.dmg),
+          dr: u8(d.hits.dr),
+          w: u16(d.hits.w),
+        }
+      : EMPTY_HITS,
   } as ReplayBundle
+}
+
+const EMPTY_HITS = {
+  n: 0,
+  t: new Uint16Array(0),
+  a: new Uint8Array(0),
+  v: new Uint8Array(0),
+  ax: new Uint16Array(0),
+  ay: new Uint16Array(0),
+  vx: new Uint16Array(0),
+  vy: new Uint16Array(0),
+  dmg: new Uint8Array(0),
+  dr: new Uint8Array(0),
+  w: new Uint16Array(0),
 }
 
 /** Quantised Uint16 back to centimetres. */

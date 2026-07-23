@@ -51,7 +51,10 @@ function makeBundle(pad: string, overrides: Record<string, unknown> = {}) {
     cameraView: 'fpp',
     le: true,
     _pad: pad,
-    players: [{ a: 'account.aaa', n: 'AndAy', t: 1, b: false, r: 1, ir: 1, c: 0 }],
+    players: [
+      { a: 'account.aaa', n: 'AndAy', t: 1, b: false, r: 1, ir: 1, c: 0 },
+      { a: 'account.bbb', n: 'Opponent', t: 2, b: false, r: 2, ir: 2, c: 1 },
+    ],
     pos: {
       n: 3,
       off: u32le([0, 3]),
@@ -82,7 +85,22 @@ function makeBundle(pad: string, overrides: Record<string, unknown> = {}) {
       q: u16le([1, 1]),
       slot: new Uint8Array([0xff, 0]),
     },
-    dicts: { items: ['', 'Item_Weapon_AK47_C'], weapons: ['', 'WeapAK47_C'] },
+    hits: {
+      n: 2,
+      t: u16le([3, 8]),
+      a: new Uint8Array([0, 0]),
+      v: new Uint8Array([1, 1]),
+      ax: u16le([10, 20]), ay: u16le([30, 40]),
+      vx: u16le([50, 60]), vy: u16le([70, 80]),
+      dmg: new Uint8Array([18, 91]),
+      dr: new Uint8Array([0, 1]),
+      w: u16le([1, 1]),
+    },
+    dicts: {
+      items: ['', 'Item_Weapon_AK47_C'],
+      weapons: ['', 'WeapAK47_C'],
+      dmgReason: ['TorsoShot', 'HeadShot'],
+    },
     events: [{ t: 5, k: 'kill', v: 0, p: 255, w: 1 }],
     ...overrides,
   })
@@ -110,6 +128,8 @@ describe('decodeBundle alignment', () => {
       expect(Array.from(bundle.pos.off), `pad=${padLength}`).toEqual([0, 3])
       expect(Array.from(bundle.zones.alive), `pad=${padLength}`).toEqual([100, 42])
       expect(Array.from(bundle.inv.a), `pad=${padLength}`).toEqual([1, 2])
+      expect(Array.from(bundle.hits.t), `pad=${padLength}`).toEqual([3, 8])
+      expect(Array.from(bundle.hits.ax), `pad=${padLength}`).toEqual([10, 20])
     }
   })
 
@@ -160,7 +180,7 @@ describe('decodeBundle contract', () => {
     expect(bundle.matchId).toBe('test-match')
     expect(bundle.mapName).toBe('Baltic_Main')
     expect(bundle.worldSize).toBe(816_000)
-    expect(bundle.players).toHaveLength(1)
+    expect(bundle.players).toHaveLength(2)
     expect(bundle.events).toHaveLength(1)
   })
 })
@@ -191,5 +211,34 @@ describe('quantisation and dictionaries', () => {
     expect(dictName(dicts, 'weapons', 7)).toBe('7')
     expect(dictName(dicts, 'nosuchdict', 3)).toBe('3')
     expect(dictName(dicts, 'weapons', 0xffff)).toBe('')
+  })
+})
+
+describe('combat tracers', () => {
+  it('decodes the hits section with both endpoints', () => {
+    const b = decodeBundle(toArrayBuffer(makeBundle('')))
+    expect(b.hits.n).toBe(2)
+    // A tracer is a line from shooter to victim, so both ends must survive.
+    expect(Array.from(b.hits.a)).toEqual([0, 0])
+    expect(Array.from(b.hits.v)).toEqual([1, 1])
+    expect(Array.from(b.hits.vx)).toEqual([50, 60])
+    expect(Array.from(b.hits.dmg)).toEqual([18, 91])
+  })
+
+  it('keeps hits in time order so the render cursor can be monotonic', () => {
+    const b = decodeBundle(toArrayBuffer(makeBundle('xx')))
+    const t = Array.from(b.hits.t)
+    expect(t).toEqual([...t].sort((x, y) => x - y))
+  })
+
+  it('tolerates a bundle from a parser older than the hits section', () => {
+    // Parser versions before 4 have no `hits`. Readers must stay
+    // unconditional rather than sprinkling optional chaining through the
+    // frame loop, so decode substitutes an empty section.
+    const raw = makeBundle('', { hits: undefined })
+    const b = decodeBundle(toArrayBuffer(raw))
+    expect(b.hits.n).toBe(0)
+    expect(b.hits.t).toHaveLength(0)
+    expect(() => Array.from(b.hits.vx)).not.toThrow()
   })
 })
