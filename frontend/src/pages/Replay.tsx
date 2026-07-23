@@ -181,7 +181,7 @@ export function Replay() {
         )}
       </div>
       <aside className="rail">
-        {ready && <KillFeed bundle={bundle} renderer={rendererRef} />}
+        {ready && <KillFeed bundle={bundle} renderer={rendererRef} tracked={tracked} />}
         <TeamList bundle={bundle} tracked={tracked} follow={follow} onFollow={onFollow} />
       </aside>
     </div>
@@ -356,9 +356,11 @@ function Controls({
 function KillFeed({
   bundle,
   renderer,
+  tracked,
 }: {
   bundle: ReplayBundle
   renderer: React.RefObject<Renderer | null>
+  tracked: Set<string>
 }) {
   const s = useReplayState()
   const tick = s.nowMs / bundle.tickMs
@@ -375,9 +377,12 @@ function KillFeed({
           const victim = bundle.players[e.v as number]
           const killer = (e.p as number) === NULL_PLAYER ? null : bundle.players[e.p as number]
           const ms = e.t * bundle.tickMs
+          const involved =
+            (killer !== null && killer !== undefined && tracked.has(killer.a)) ||
+            (victim !== undefined && tracked.has(victim.a))
           return (
             <button
-              className={`feed-row kind-${e.k}`}
+              className={`feed-row kind-${e.k}${involved ? ' tracked' : ''}`}
               key={`${e.t}-${i}`}
               onClick={() => renderer.current?.seek(Math.max(0, ms - 3000))}
               title="jump here"

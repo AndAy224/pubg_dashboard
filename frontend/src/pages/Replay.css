@@ -136,6 +136,10 @@
   border-radius: 3px; padding: 2px 4px; cursor: pointer;
 }
 .replay .feed-row:hover { background: var(--bg-raised); }
+/* Same treatment as the scoreboard's tracked rows: the squad's fights are
+   what anyone scanning this feed is looking for. */
+.replay .feed-row.tracked { background: #1c2530; box-shadow: inset 2px 0 0 var(--accent); }
+.replay .feed-row.tracked:hover { background: var(--bg-raised); }
 .replay .feed-row.kind-knock { opacity: .72; }
 .replay .feed-row.kind-revive { opacity: .72; }
 .replay .feed-row.kind-revive .faint { color: var(--good); }

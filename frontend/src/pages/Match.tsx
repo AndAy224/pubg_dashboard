@@ -2,11 +2,12 @@ import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router'
 import { apiBase, get } from '../api/client'
-import type { KillRow, MatchDetail, ParticipantRow, TileInfo } from '../api/types'
+import type { KillRow, MatchDetail, MatchStrategyRow, ParticipantRow, TileInfo } from '../api/types'
 import { KillMap } from '../components/KillMap'
 import { Place, Skeleton } from '../components/ui'
-import { dateTime, duration, gameMode, num, weaponName } from '../lib/format'
+import { dateTime, distance, duration, gameMode, num, weaponName } from '../lib/format'
 import { hex, teamColour } from '../lib/palette'
+import { playerColourHex } from '../lib/players'
 
 export function Match() {
   const { matchId = '' } = useParams()
@@ -30,6 +31,11 @@ export function Match() {
     queryFn: () => get<Record<string, TileInfo>>('/tiles/manifest.json'),
     staleTime: 10 * 60_000,
   })
+  const strategy = useQuery({
+    queryKey: ['matchStrategy', matchId],
+    queryFn: () => get<MatchStrategyRow[]>(`/matches/${matchId}/strategy`),
+    staleTime: Infinity,
+  })
 
   const m = match.data
   useEffect(() => {
@@ -48,6 +54,18 @@ export function Match() {
 
   const info = tiles.data?.[m.mapName]
   const trackedRosters = m.rosters.filter((r) => r.participants.some((p) => p.tracked))
+
+  // For highlighting kill-feed rows a tracked player took part in. Derived
+  // from the match's own roster rather than the global registry, so it cannot
+  // race the tracked-players fetch. Assists arrive as display names on the
+  // wire, so a name set is needed alongside the id set.
+  const trackedParticipants = m.rosters.flatMap((r) => r.participants.filter((p) => p.tracked))
+  const trackedIds = new Set(trackedParticipants.map((p) => p.accountId))
+  const trackedNames = new Set(trackedParticipants.map((p) => p.name))
+  const involvesTracked = (k: KillRow) =>
+    (k.killerAccountId !== null && trackedIds.has(k.killerAccountId)) ||
+    trackedIds.has(k.victimAccountId) ||
+    k.assists.some((a) => trackedNames.has(a))
 
   return (
     <div className="grid" style={{ gap: 18 }}>
@@ -88,6 +106,13 @@ export function Match() {
           </Link>
         )}
       </section>
+
+      {strategy.data && strategy.data.length > 0 && (
+        <section className="card">
+          <h3 style={{ marginBottom: 10 }}>Strategy</h3>
+          <StrategyPanel rows={strategy.data} teamSize={m.teamSize} />
+        </section>
+      )}
 
       {info && kills.data && kills.data.length > 0 && (
         <section className="card">
@@ -167,7 +192,12 @@ export function Match() {
             </colgroup>
             <tbody>
               {kills.data?.map((k) => (
-                <tr key={k.seq} className={k.isTeamKill ? 'teamkill' : ''}>
+                <tr
+                  key={k.seq}
+                  className={[k.isTeamKill ? 'teamkill' : '', involvesTracked(k) ? 'tracked' : '']
+                    .filter(Boolean)
+                    .join(' ')}
+                >
                   <td className="num faint">
                     {m.hasReplay ? (
                       <Link
@@ -284,4 +314,64 @@ function killSummary(k: KillRow): string {
 function zoneCause(k: KillRow): string {
   if (k.isSuicide) return 'self'
   return 'zone/fall'
+}
+
+/**
+ * The strategy debrief: what the tracked players did, as numbers.
+ *
+ * A dash is "not measurable" (no landing, no teammates, no fights), never
+ * zero — the distinction is the whole reason the API keeps these nullable.
+ */
+function StrategyPanel({ rows, teamSize }: { rows: MatchStrategyRow[]; teamSize: number | null }) {
+  const solo = teamSize === 1
+  return (
+    <table className="scoreboard">
+      <thead>
+        <tr>
+          <th>Player</th>
+          <th className="r">In blue</th>
+          <th className="r">Zone dmg</th>
+          <th className="r">Rotation lag</th>
+          {!solo && <th className="r">Squad dist</th>}
+          <th className="r">Drop contested</th>
+          <th className="r">First weapon</th>
+          <th className="r">First fight</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((r) => (
+          <tr key={r.accountId}>
+            <td>
+              <span
+                className="dot"
+                style={{
+                  display: 'inline-block', width: 8, height: 8, borderRadius: '50%',
+                  marginRight: 7, background: playerColourHex(r.accountId),
+                }}
+              />
+              {r.name}
+            </td>
+            <td className="r num">{r.blueS === null ? '—' : duration(r.blueS)}</td>
+            <td className="r num dim">{r.blueDamage === null ? '—' : num(r.blueDamage)}</td>
+            <td className="r num dim">{r.rotateLagS === null ? '—' : duration(r.rotateLagS)}</td>
+            {!solo && (
+              <td
+                className="r num dim"
+                title={
+                  r.teammateNearPct === null
+                    ? undefined
+                    : `within 100 m of the squad ${num(r.teammateNearPct * 100)}% of the time`
+                }
+              >
+                {r.teammateDistAvgCm === null ? '—' : distance(r.teammateDistAvgCm / 100)}
+              </td>
+            )}
+            <td className="r num dim">{r.hotDropN === null ? '—' : `${r.hotDropN} nearby`}</td>
+            <td className="r num dim">{r.firstWeaponS === null ? '—' : duration(r.firstWeaponS)}</td>
+            <td className="r num dim">{r.firstEngageS === null ? '—' : duration(r.firstEngageS)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
 }
