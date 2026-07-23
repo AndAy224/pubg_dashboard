@@ -104,40 +104,46 @@ export function Match() {
               {showBots ? 'hide bots' : 'bots hidden'}
             </button>
           </div>
-          {/* Grouped by roster because that is the data model: participants
+          {/* ONE table for every roster, never one per roster — see SCORE_COLUMNS.
+              Grouped by roster because that is the data model: participants
               carry no team id of their own, only the roster links them. */}
-          {m.rosters
-            .filter((r) => showBots || r.participants.some((p) => !p.isBot))
-            .map((r) => (
-              <div key={r.teamId} className="roster">
-                <div className="roster-head">
-                  <span className="swatch" style={{ background: hex(teamColour(r.teamId)) }} />
-                  <Place place={r.rank} size="sm" />
-                  <span className="faint">team {r.teamId}</span>
-                  {r.won && <span className="tag win">winner</span>}
-                </div>
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Player</th>
-                      <th className="r" title="kills (human-only)">K</th>
-                      <th className="r" title="knocks">Kn</th>
-                      <th className="r" title="assists">A</th>
-                      <th className="r">Dmg</th>
-                      <th className="r" title="headshot kills">HS</th>
-                      <th className="r">Alive</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {r.participants
-                      .filter((p) => showBots || !p.isBot)
-                      .map((p) => (
-                        <ScoreRow key={p.accountId} p={p} />
-                      ))}
-                  </tbody>
-                </table>
-              </div>
-            ))}
+          <table className="scoreboard">
+            <colgroup>
+              {SCORE_COLUMNS.map((c) => (
+                <col key={c.key} style={c.width ? { width: c.width } : undefined} />
+              ))}
+            </colgroup>
+            <thead>
+              <tr>
+                {SCORE_COLUMNS.map((c) => (
+                  <th key={c.key} className={c.width == null ? '' : 'r'} title={c.title}>
+                    {c.label}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            {m.rosters
+              .filter((r) => showBots || r.participants.some((p) => !p.isBot))
+              .map((r) => (
+                <tbody key={r.teamId} className="roster">
+                  <tr className="roster-row">
+                    <td colSpan={SCORE_COLUMNS.length}>
+                      <div className="roster-head">
+                        <span className="swatch" style={{ background: hex(teamColour(r.teamId)) }} />
+                        <Place place={r.rank} size="sm" />
+                        <span className="faint">team {r.teamId}</span>
+                        {r.won && <span className="tag win">winner</span>}
+                      </div>
+                    </td>
+                  </tr>
+                  {r.participants
+                    .filter((p) => showBots || !p.isBot)
+                    .map((p) => (
+                      <ScoreRow key={p.accountId} p={p} />
+                    ))}
+                </tbody>
+              ))}
+          </table>
         </section>
 
         <section className="card scroll" style={{ maxHeight: 720 }}>
@@ -191,6 +197,36 @@ export function Match() {
   )
 }
 
+/**
+ * One column geometry for the whole scoreboard.
+ *
+ * Every roster used to render its own `<table>`, and HTML sizes a table's
+ * columns from *that table's* own content — so each team's Player column was
+ * as wide as its own longest name, every numeric column landed somewhere
+ * different, and nothing lined up down the page. One table with one `<thead>`
+ * fixes that by construction (and stops N sticky headers fighting each other
+ * inside the scroll container).
+ *
+ * `table-layout: fixed` plus this `<colgroup>` then pins the geometry so it
+ * cannot drift with whoever happens to have the longest name in the lobby.
+ * Widths live beside the labels so the `<col>` and the `<th>` cannot separate.
+ * A column with no width is the flexible label column, and is left-aligned;
+ * the fixed ones are numeric and right-aligned.
+ */
+const SCORE_COLUMNS: { key: string; label: string; width?: number; title?: string }[] = [
+  { key: 'player', label: 'Player' },
+  // Wide enough for `7 (13)` — kills carries a raw-total suffix when bot kills
+  // make the two disagree.
+  { key: 'k', label: 'K', width: 66, title: 'kills (human-only)' },
+  { key: 'kn', label: 'Kn', width: 48, title: 'knocks' },
+  { key: 'a', label: 'A', width: 46, title: 'assists' },
+  { key: 'dmg', label: 'Dmg', width: 68 },
+  { key: 'hs', label: 'HS', width: 46, title: 'headshot kills' },
+  // `duration` renders `30m 00s` — seven monospace characters.
+  { key: 'alive', label: 'Alive', width: 84 },
+]
+
+/** One participant. Its cells must stay in step with `SCORE_COLUMNS`. */
 function ScoreRow({ p }: { p: ParticipantRow }) {
   // `shotsFired === 0` means PUBG did not report weapon stats for this
   // account, not that they never fired — it populates them for ~2 accounts

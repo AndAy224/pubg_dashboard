@@ -104,11 +104,26 @@ td.r, th.r { text-align: right; }
 .kv dd { margin: 0; text-align: right; }
 
 /* --- Match --------------------------------------------------------------- */
-.roster { margin-bottom: 12px; }
+/* One table, one column geometry — see SCORE_COLUMNS in pages/Match.tsx for
+   why a table per roster could never line up. `fixed` makes the <colgroup>
+   authoritative instead of a hint, and degrades by shrinking columns
+   proportionally rather than overflowing when the card is narrow. */
+.scoreboard { table-layout: fixed; }
+.scoreboard td { border-bottom: none; padding: 3px 10px; }
+.scoreboard th { font-size: 10px; padding: 4px 10px; }
+/* Fixed layout will not widen a column for a long name, so clip rather than
+   wrap the row to two lines. */
+.scoreboard td:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scoreboard td.num { white-space: nowrap; }
+
+/* Each roster is a <tbody>, where `margin` does nothing — the gap between
+   teams has to come from the group header's own padding. */
+.roster-row td { padding: 0; }
+.roster + .roster .roster-head { padding-top: 14px; }
+/* A group header is not a row you can hover; it should not light up like one. */
+.roster-row:hover td { background: none; }
 .roster-head { display: flex; align-items: center; gap: 8px; padding: 4px 10px; font-size: 12px; }
 .swatch { width: 10px; height: 10px; border-radius: 2px; flex: 0 0 10px; }
-.roster table td { border-bottom: none; padding: 3px 10px; }
-.roster table th { font-size: 10px; padding: 4px 10px; }
 tr.tracked td { background: #1c2530; }
 tr.tracked td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
 
