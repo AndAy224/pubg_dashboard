@@ -7,6 +7,7 @@ import {
   FLAG_IN_VEHICLE,
   FLAG_PARACHUTING,
 } from './replayBundle'
+import { markersAt } from '../replay/engine/markers'
 
 /**
  * The decoder against **real** bundles.
@@ -217,5 +218,57 @@ describe('real replay bundles', () => {
     // The bundle and kill_events are separate outputs of the same parse, so
     // disagreement means one of them is being read wrong.
     expect(bundle.events.filter((e) => e.k === 'kill').length).toBe(kills.length)
+  })
+
+  it('draws every kill and crate by the end of the match', async ({ skip }) => {
+    if (!(await apiReachable())) skip('no API reachable')
+
+    const ids = await matchIds(SAMPLE)
+    expect(ids.length).toBeGreaterThan(0)
+
+    for (const id of ids) {
+      const b = decodeBundle(await (await fetch(`${BASE}/api/matches/${id}/replay`)).arrayBuffer())
+      const endTick = b.durationMs / b.tickMs
+      const m = markersAt(b.events, endTick, 1)
+
+      // `drawEvents` used to run once at tick 0, where the loop breaks on the
+      // first event and draws nothing. Asserting at the *end* of the match is
+      // what makes that failure visible: the old call produced zero of these.
+      expect(m.kills.length, `${id} kills`).toBe(b.events.filter((e) => e.k === 'kill').length)
+      expect(m.crates.length, `${id} crates`).toBe(b.events.filter((e) => e.k === 'cp').length)
+      expect(m.kills.length, `${id} has no kills at all`).toBeGreaterThan(0)
+
+      // Every crate has landed by the end, and none is off the quantised grid.
+      for (const c of m.crates) {
+        expect(c.falling, `${id} crate still falling at match end`).toBe(false)
+        expect(c.x).toBeGreaterThanOrEqual(0)
+        expect(c.x).toBeLessThanOrEqual(65535)
+      }
+    }
+  })
+
+  it('has a flight path that reaches the map edge', async ({ skip }) => {
+    if (!(await apiReachable())) skip('no API reachable')
+
+    const ids = await matchIds(SAMPLE)
+    let withPlane = 0
+    for (const id of ids) {
+      const b = decodeBundle(await (await fetch(`${BASE}/api/matches/${id}/replay`)).arrayBuffer())
+      if (b.plane === null) continue
+      withPlane++
+      const { x0, y0, x1, y1 } = b.plane
+
+      // The parser fits the flight line by total least squares and extends it
+      // to the map bounds, so it always touches an edge of the quantised
+      // grid. If someone ever passes centimetres through instead of quantised
+      // units the line still renders — as a short stub near the origin, which
+      // reads as a rendering quirk rather than as a unit bug. This is the
+      // assertion that tells them apart.
+      const vals = [x0, y0, x1, y1]
+      expect(Math.min(...vals) === 0 || Math.max(...vals) === 65535, `${id} plane ${vals}`).toBe(
+        true,
+      )
+    }
+    expect(withPlane, 'no bundle carried a flight path').toBeGreaterThan(0)
   })
 })

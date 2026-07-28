@@ -29,7 +29,7 @@ export function Timeline({
   const width = 1000
   const height = 34
 
-  const { curve, kills, phases } = useMemo(() => {
+  const { curve, teamCurve, kills, phases } = useMemo(() => {
     const total = bundle.durationMs || 1
     const z = bundle.zones
 
@@ -43,6 +43,25 @@ export function Timeline({
     }
     const area =
       points.length > 1 ? `M0,${height} L${points.join(' L')} L${width},${height} Z` : ''
+
+    // Teams alive, as a line over the same strip. `zones.teams` has shipped in
+    // every bundle and had never been drawn.
+    //
+    // **Normalised to its own maximum, not shared with the player curve.**
+    // A squad match starts at ~100 players and ~25 teams, so a shared axis
+    // draws the team line as a flat worm along the bottom that reads as noise.
+    // The two curves answer different questions — "how many people are left"
+    // and "how many groups are left" — and the gap between their shapes is the
+    // interesting part: they diverge exactly when squads are being wiped
+    // rather than picked apart.
+    const teamPoints: string[] = []
+    const maxTeams = Math.max(1, ...Array.from(z.teams))
+    for (let i = 0; i < z.n; i++) {
+      const x = ((z.t[i]! * bundle.tickMs) / total) * width
+      const y = height - (z.teams[i]! / maxTeams) * height
+      teamPoints.push(`${x.toFixed(1)},${y.toFixed(1)}`)
+    }
+    const teamLine = teamPoints.length > 1 ? `M${teamPoints.join(' L')}` : ''
 
     const trackedIdx = new Set(
       bundle.players.map((p, i) => (tracked.has(p.a) ? i : -1)).filter((i) => i >= 0),
@@ -68,7 +87,7 @@ export function Timeline({
       .filter((e) => e.k === 'phase')
       .map((e) => ({ x: ((e.t * bundle.tickMs) / total) * width, ph: e.ph as number }))
 
-    return { curve: area, kills: killTicks, phases: phaseTicks }
+    return { curve: area, teamCurve: teamLine, kills: killTicks, phases: phaseTicks }
   }, [bundle, tracked])
 
   const playheadX = ((nowMs / (bundle.durationMs || 1)) * width).toFixed(1)
@@ -88,6 +107,7 @@ export function Timeline({
         onClick={seekFromEvent}
       >
         <path className="tl-alive" d={curve} />
+        <path className="tl-teams" d={teamCurve} />
 
         {phases.map((p, i) => (
           <line key={`ph-${i}`} className="tl-phase" x1={p.x} x2={p.x} y1={0} y2={height} />

@@ -36,6 +36,8 @@ export function ReplayCanvas({
     let app: Application | null = null
     let renderer: Renderer | null = null
     let cancelled = false
+    /** True only once `app.init()` has resolved. See the cleanup below. */
+    let initialised = false
 
     ;(async () => {
       const el = holder.current
@@ -49,6 +51,7 @@ export function ReplayCanvas({
         resizeTo: el,
         preference: 'webgpu',
       })
+      initialised = true
       if (cancelled) {
         app.destroy(true, { children: true, texture: true })
         return
@@ -70,7 +73,6 @@ export function ReplayCanvas({
         onError,
       })
       renderer.start()
-      renderer.drawEvents()
       // Deliberately global. Three replay bugs in a row were only findable by
       // driving the live renderer from a headless browser
       // (`scripts/probe-replay.mjs`), and a handle turns that from guesswork
@@ -88,7 +90,19 @@ export function ReplayCanvas({
     return () => {
       cancelled = true
       renderer?.destroy()
-      app?.destroy(true, { children: true, texture: true })
+      // **Only an Application that finished `init()` may be destroyed.** Pixi's
+      // ResizePlugin assigns `_cancelResize` during `init`, and `destroy()`
+      // calls it unconditionally — so tearing down while `init()` is still in
+      // flight throws `this._cancelResize is not a function`, synchronously,
+      // inside a React cleanup. React Router's error boundary then takes the
+      // whole page, the canvas reads as MISSING, and the only message anyone
+      // gets names a Pixi internal that has nothing to do with the problem.
+      //
+      // Observed once in a headless probe and not reproduced in five further
+      // runs, which is exactly how a mount/unmount race behaves. Nothing is
+      // actually wrong in that case: the `if (cancelled)` branch above already
+      // destroys the app properly once init resolves.
+      if (initialised) app?.destroy(true, { children: true, texture: true })
     }
   }, [bundle, sourcePx, tilePx, imageScale, maxZoom, tracked, onReady, onError])
 

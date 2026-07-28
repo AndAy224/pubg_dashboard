@@ -4,6 +4,7 @@ import { FLAG_ALIVE, FLAG_DBNO, FLAG_DRIVING, FLAG_IN_VEHICLE, NULL_PLAYER } fro
 import { BOT_COLOUR, teamColour } from '../../lib/palette'
 import { playerColourInt } from '../../lib/players'
 import { Viewport } from './Viewport'
+import { interpolateAt, markerRadius, markersAt, trailPoints } from './markers'
 import { ALIVE, KNOCKED, OUT, publish, publishHealth } from '../store'
 
 /**
@@ -32,6 +33,32 @@ const LABEL_SCALE = 0.55
  * the same *amount of combat* visible at every speed.
  */
 const TRACER_MS = 1200
+
+/**
+ * How much of a player's recent movement the trail shows, in **match** ms —
+ * match time for the same reason `TRACER_MS` is (a wall-clock window would
+ * show 20x as much ground at 20x speed).
+ *
+ * Trails are drawn only for tracked players and whoever is being followed.
+ * A hundred of them at fit zoom is a grey wash over the island, and it is the
+ * same argument the health rings settled: a mark that every player carries all
+ * the time carries no information.
+ */
+const TRAIL_MS = 30_000
+
+/**
+ * How long an abandoned vehicle stays on the map, in match ms.
+ *
+ * There are ~245 `leave` events in a match. Persisting them all litters the
+ * island with cars that were dumped fifteen minutes ago; a fading window keeps
+ * the signal that actually matters — someone just got out, near here, now.
+ */
+const VEHICLE_MS = 30_000
+
+/** Screen-pixel radii for the world markers. Constant at every zoom. */
+const KILL_R = 5
+const CRATE_R = 4
+const VEHICLE_R = 4
 
 /**
  * Health ring geometry, in world units before the counter-scale.
@@ -133,10 +160,9 @@ export class Renderer {
   private readonly zoneLayer = new Graphics()
   private readonly trailLayer = new Graphics()
   private readonly tracerLayer = new Graphics()
-  private readonly worldLayer = new Container()
+  private readonly worldLayer = new Graphics()
   private readonly dotLayer = new Container()
   private readonly labelLayer = new Container()
-  private readonly fxLayer = new Container()
 
   private readonly dots: Sprite[] = []
   private readonly rings: Graphics[] = []
@@ -163,6 +189,17 @@ export class Renderer {
   private _headShotIndex: number | undefined
   /** Shared steering-wheel marker; null if it could not be rasterised. */
   private readonly wheelTexture: Texture | null
+
+  /**
+   * What the last frame actually put on the canvas.
+   *
+   * Read through `window.__replay` by `scripts/probe-replay.mjs`. HANDOFF §19:
+   * four probe attempts in a row showed no combat tracers and all four were
+   * the probe's fault — wrong camera, wrong moment. **A blank screenshot
+   * proves nothing about the code**, so the drawing is confirmed from live
+   * state first and the picture second.
+   */
+  readonly drawn = { kills: 0, crates: 0, vehicles: 0, trails: 0, tracers: 0, plane: false }
 
   /** Playhead, in milliseconds since t0. A ref, never React state. */
   nowMs = 0
@@ -207,7 +244,6 @@ export class Renderer {
       this.tracerLayer,
       this.dotLayer,
       this.labelLayer,
-      this.fxLayer,
     )
     app.stage.addChild(this.world)
 
@@ -447,11 +483,14 @@ export class Renderer {
   seek(ms: number): void {
     const clamped = Math.max(0, Math.min(ms, this.opts.bundle.durationMs))
     // Backwards seek invalidates every monotonic cursor, so they are rebuilt
-    // by binary search — 100 searches, microseconds — and the trail is wiped
-    // because it is append-only.
+    // by binary search — 100 searches, microseconds.
+    //
+    // The trail layer is *not* cleared here any more: it is rebuilt from the
+    // position arrays every frame, so it has no accumulated state to
+    // invalidate. Leaving the clear in place would have been a second
+    // invalidation path that no longer says anything true.
     if (clamped < this.nowMs) {
       this.resetCursors(clamped)
-      this.trailLayer.clear()
       // Monotonic like the position cursors, so a backwards seek invalidates it.
       this.hitCursor = 0
     }
@@ -502,12 +541,12 @@ export class Renderer {
       }
 
       // O(1) amortised: the cursor only ever moves forward during playback.
-      let c = this.cursor[p]!
-      while (c + 1 < end && b.pos.t[c + 1]! <= tick) c++
-      this.cursor[p] = c
-
-      const t0 = b.pos.t[c]!
-      if (t0 > tick) {
+      // Positions are ~10 s apart at worst, so interpolation is mandatory —
+      // without it everyone teleports between samples. **`interpolateAt` is
+      // the one definition of where a player is**, shared with `trailPoints`,
+      // so a trail can never disagree with the dot it trails from.
+      const sample = interpolateAt(b.pos, p, tick, this.cursor[p]!)
+      if (sample === null) {
         // Player has not appeared yet.
         dot.visible = false
         ring.visible = false
@@ -516,22 +555,12 @@ export class Renderer {
         this.setHealth(p, 0, OUT)
         continue
       }
+      const c = sample.c
+      this.cursor[p] = c
 
-      let x = this.toWorld(b.pos.x[c]!)
-      let y = this.toWorld(b.pos.y[c]!)
-      if (c + 1 < end) {
-        // Positions are ~10s apart at worst, so interpolation is mandatory —
-        // without it everyone teleports between samples.
-        const t1 = b.pos.t[c + 1]!
-        const span = t1 - t0
-        if (span > 0) {
-          const f = Math.max(0, Math.min(1, (tick - t0) / span))
-          x += (this.toWorld(b.pos.x[c + 1]!) - x) * f
-          y += (this.toWorld(b.pos.y[c + 1]!) - y) * f
-        }
-      }
-
-      const flags = b.pos.flags[c]!
+      const x = this.toWorld(sample.x)
+      const y = this.toWorld(sample.y)
+      const flags = sample.flags
       // "Still in the match", knocked included — parser version 5 resolves
       // this against the final death, so a knocked player is drawn and a dead
       // one is not. Before that this bit meant `health > 0` and every knock
@@ -622,6 +651,8 @@ export class Renderer {
     if (this.viewport.isFollowing !== null) this.viewport.centreOn(followX, followY)
 
     this.drawZones(tick)
+    this.drawTrails(tick)
+    this.drawMarkers(tick)
     this.drawTracers(tick)
     publish({ nowMs: this.nowMs, alive, playing: this.playing, speed: this.speed })
     publishHealth(this.hpOut, this.statusOut, this.hpVersion)
@@ -654,6 +685,7 @@ export class Renderer {
     while (this.hitCursor < h.n && h.t[this.hitCursor]! < from) this.hitCursor++
 
     const headShot = this.dmgReasonIndex('HeadShot')
+    this.drawn.tracers = 0
 
     for (let i = this.hitCursor; i < h.n; i++) {
       const t = h.t[i]!
@@ -662,6 +694,7 @@ export class Renderer {
       // 1 at the moment of impact, 0 as it leaves the window.
       const age = 1 - (tick - t) / windowTicks
       if (age <= 0) continue
+      this.drawn.tracers++
 
       const ax = this.toWorld(h.ax[i]!)
       const ay = this.toWorld(h.ay[i]!)
@@ -769,27 +802,112 @@ export class Renderer {
     }
   }
 
-  /** Draw kill markers for everything that has happened up to now. */
-  drawEvents(): void {
+  /**
+   * Death markers, care packages, abandoned vehicles and the flight path.
+   *
+   * **This used to be a public `drawEvents()` called exactly once**, from
+   * `ReplayCanvas` right after `start()` while `nowMs === 0`. Its loop breaks
+   * on the first event with `t > tick`, so at tick 0 it drew nothing, and
+   * nothing ever called it again — not from `drawFrame`, not from `seek`. Kill
+   * crosses and crates were invisible for the whole life of the replay.
+   *
+   * Fixing the call site alone would not have shown anything: the markers were
+   * sized in **world** units (±4), which is 0.44 px at Erangel fit zoom. They
+   * are counter-scaled now, like every other marker here.
+   */
+  private drawMarkers(tick: number): void {
     const b = this.opts.bundle
-    this.worldLayer.removeChildren().forEach((c) => c.destroy())
-    const g = new Graphics()
-    const tick = this.nowMs / b.tickMs
-    for (const e of b.events) {
-      if (e.t > tick) break
-      if (e.k === 'kill') {
-        const vx = this.toWorld(e.vx as number)
-        const vy = this.toWorld(e.vy as number)
-        g.moveTo(vx - 4, vy - 4).lineTo(vx + 4, vy + 4)
-        g.moveTo(vx + 4, vy - 4).lineTo(vx - 4, vy + 4)
-      } else if (e.k === 'cp') {
-        const x = this.toWorld(e.x as number)
-        const y = this.toWorld(e.y as number)
-        g.rect(x - 4, y - 4, 8, 8)
+    const g = this.worldLayer
+    g.clear()
+
+    const inv = 1 / this.viewport.scale
+    const m = markersAt(b.events, tick, VEHICLE_MS / b.tickMs)
+    this.drawn.kills = m.kills.length
+    this.drawn.crates = m.crates.length
+    this.drawn.vehicles = m.vehicles.length
+    this.drawn.plane = b.plane !== null
+
+    // Flight path first, underneath everything: it is context, not an event.
+    if (b.plane !== null) {
+      g.moveTo(this.toWorld(b.plane.x0), this.toWorld(b.plane.y0))
+        .lineTo(this.toWorld(b.plane.x1), this.toWorld(b.plane.y1))
+        .stroke({ width: markerRadius(1, this.viewport.scale), color: 0x8fa0c0, alpha: 0.35 })
+    }
+
+    // Abandoned vehicles: a hollow ring, fading out over VEHICLE_MS.
+    for (const v of m.vehicles) {
+      g.circle(this.toWorld(v.x), this.toWorld(v.y), markerRadius(VEHICLE_R, this.viewport.scale))
+      g.stroke({ width: 1.2 * inv, color: 0x9ab0c8, alpha: 0.5 * v.age })
+    }
+
+    // Care packages. Hollow while falling, solid once landed — the spawn and
+    // landing ticks are ~30 s apart, and one square from `t` put a crate on
+    // the map half a minute before it existed.
+    for (const c of m.crates) {
+      const x = this.toWorld(c.x)
+      const y = this.toWorld(c.y)
+      const r = markerRadius(CRATE_R, this.viewport.scale)
+      g.rect(x - r, y - r, r * 2, r * 2)
+      if (c.falling) {
+        g.stroke({ width: 1.2 * inv, color: 0xf0b429, alpha: 0.55 })
+      } else {
+        g.fill({ color: 0xf0b429, alpha: 0.8 })
       }
     }
-    g.stroke({ width: 1.5, color: 0xff6b6b, alpha: 0.75 })
-    this.worldLayer.addChild(g)
+
+    // Deaths. A tracked player's death is gold, like everywhere else.
+    for (const k of m.kills) {
+      const x = this.toWorld(k.x)
+      const y = this.toWorld(k.y)
+      const r = markerRadius(KILL_R, this.viewport.scale)
+      const victim = b.players[k.v]
+      const tracked = victim !== undefined && this.opts.tracked.has(victim.a)
+      g.moveTo(x - r, y - r).lineTo(x + r, y + r)
+      g.moveTo(x + r, y - r).lineTo(x - r, y + r)
+      g.stroke({
+        width: (tracked ? 2 : 1.5) * inv,
+        color: tracked ? 0xffd400 : 0xff6b6b,
+        alpha: tracked ? 0.95 : 0.7,
+      })
+    }
+  }
+
+  /**
+   * The last `TRAIL_MS` of movement, for the people you came to watch.
+   *
+   * Tracked players and whoever is followed only. A hundred trails at fit zoom
+   * is a grey wash across the island, and "everyone has been somewhere" is not
+   * worth a hundred marks — the same argument that keeps the health ring off
+   * players at full health.
+   */
+  private drawTrails(tick: number): void {
+    const b = this.opts.bundle
+    const g = this.trailLayer
+    g.clear()
+
+    const windowTicks = TRAIL_MS / b.tickMs
+    const width = markerRadius(1.4, this.viewport.scale)
+    this.drawn.trails = 0
+
+    for (let p = 0; p < b.players.length; p++) {
+      const player = b.players[p]!
+      if (!this.opts.tracked.has(player.a) && this.viewport.isFollowing !== p) continue
+
+      const pts = trailPoints(b.pos, p, tick, windowTicks, this.cursor[p]!)
+      if (pts.length < 4) continue
+
+      g.moveTo(this.toWorld(pts[0]!), this.toWorld(pts[1]!))
+      for (let i = 2; i < pts.length; i += 2) {
+        g.lineTo(this.toWorld(pts[i]!), this.toWorld(pts[i + 1]!))
+      }
+      g.stroke({ width, color: playerColourInt(player.a) ?? teamColour(player.c), alpha: 0.5 })
+      this.drawn.trails++
+    }
+  }
+
+  /** Current zoom, for the probe. Markers are counter-scaled by 1/this. */
+  get viewportScale(): number {
+    return this.viewport.scale
   }
 
   followPlayer(index: number | null): void {

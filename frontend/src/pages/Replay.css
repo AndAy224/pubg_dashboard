@@ -52,6 +52,9 @@
 /* The survivor curve. Its cliffs are the fights — that is the whole point of
    drawing it behind the scrubber. */
 .replay .tl-alive { fill: #1c2114; stroke: #4a5236; stroke-width: 1; }
+/* Teams alive: a line, not an area, so it reads as a second series over the
+   survivor curve rather than competing with it for the same ground. */
+.replay .tl-teams { fill: none; stroke: #7d8a5a; stroke-width: 1; stroke-dasharray: 3 2; opacity: 0.75; }
 .replay .tl-phase { stroke: #3d422e; stroke-width: 1; stroke-dasharray: 2 3; }
 
 .replay .tl-kill { stroke: #6e7681; stroke-width: 1; }

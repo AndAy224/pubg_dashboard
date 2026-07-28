@@ -75,6 +75,12 @@ try {
 
   const dom = await page.evaluate(() => {
     const canvas = document.querySelector('canvas')
+    // **Read what the renderer says it drew, before looking at the picture.**
+    // HANDOFF §19: four probe runs in a row showed no combat tracers and all
+    // four were the probe's fault — camera pointed elsewhere, or a moment
+    // between bursts. A blank screenshot proves nothing about the code, so the
+    // live counters are the assertion and the PNG is the illustration.
+    const r = window.__replay
     return {
       canvas: canvas ? `${canvas.clientWidth}x${canvas.clientHeight}` : 'MISSING',
       renderError: document.querySelector('.render-error')?.textContent ?? null,
@@ -82,6 +88,9 @@ try {
       feedRows: document.querySelectorAll('.feed-row').length,
       teamButtons: document.querySelectorAll('.member').length,
       clock: document.querySelector('.topbar')?.textContent ?? null,
+      drawn: r?.drawn ? { ...r.drawn } : 'NO RENDERER HANDLE',
+      nowMs: r?.nowMs ?? null,
+      scale: r?.viewportScale ?? null,
     }
   })
 
