@@ -178,12 +178,24 @@ class WeaponAccuracy:
 
 @dataclass(slots=True)
 class Knock:
+    """One `LogPlayerMakeGroggy`. Maps 1:1 onto a `knock_events` row.
+
+    Absent from solo matches **entirely** — 55 of 61 archived matches at the
+    time this was written had none — so any consumer must treat an empty list
+    as normal rather than as a parse failure.
+    """
+
     t_s: float
     victim_account_id: str
-    attacker_account_id: str | None
+    victim_team_id: int
+    victim_is_bot: bool
     victim_x: float
     victim_y: float
+    attacker_account_id: str | None
+    attacker_team_id: int | None
+    attacker_is_bot: bool | None
     weapon: str | None
+    damage_reason: str | None
     distance_cm: float | None
 
 
@@ -484,10 +496,17 @@ class CombatTracker:
             Knock(
                 t_s=self._rel(event),
                 victim_account_id=victim_account,
-                attacker_account_id=attacker_account,
+                victim_team_id=int(victim.get("teamId") or 0),
+                victim_is_bot=E.is_bot(victim),
                 victim_x=vx,
                 victim_y=vy,
+                attacker_account_id=attacker_account,
+                attacker_team_id=int(attacker.get("teamId") or 0) if attacker else None,
+                attacker_is_bot=E.is_bot(attacker) if attacker else None,
                 weapon=event.get("damageCauserName") or None,
+                damage_reason=event.get("damageReason") or None,
+                # -1 is "not applicable", not zero metres — same sentinel as
+                # kills, and every "longest" query has to filter `> 0`.
                 distance_cm=None if distance is None else float(distance),
             )
         )

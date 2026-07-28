@@ -1028,3 +1028,64 @@ def test_derived_accuracy_covers_most_of_the_lobby() -> None:
     assert oracle / humans < 0.10, "PUBG suddenly reports for everyone; re-read the docstring"
     assert derived / humans > 0.80, f"coverage collapsed to {derived / humans:.1%}"
 
+
+def test_knock_rows_match_the_groggy_events_and_are_absent_from_solo() -> None:
+    """`knock_events` is 1:1 with `LogPlayerMakeGroggy` — including at zero.
+
+    The zero case is the point. `LogPlayerMakeGroggy` **does not exist in solo
+    modes at all**, so a parser that treats an empty knock list as a failure
+    breaks on every solo match, and a test that only ever runs on squad
+    matches never notices.
+    """
+    pairs = _corpus_pairs(20)
+    if not pairs:
+        pytest.skip("no archived corpus; run scripts/panic_archive.py")
+
+    with_knocks = without = 0
+    for tele_path, _ in pairs:
+        events = reader.load(tele_path.read_bytes())
+        groggy = sum(
+            1
+            for e in events
+            if reader.norm(e.get("_T", "")) == reader.norm(E.PLAYER_MAKE_GROGGY)
+        )
+        ct = CombatTracker(0.0)
+        for e in events:
+            ct.feed(e)
+        assert len(ct.knocks) == groggy, tele_path.name
+        if groggy:
+            with_knocks += 1
+        else:
+            without += 1
+
+    assert with_knocks > 0, "no knocks anywhere; the corpus cannot check this"
+    # Not asserted as non-zero: whether the archive currently holds a solo
+    # match is an accident of what got played, and a test that fails when the
+    # squad stops playing solos is a test that fails for the wrong reason.
+    assert without >= 0
+
+
+def test_longest_kill_excludes_the_not_applicable_sentinel() -> None:
+    """`distance = -1` means "not applicable", and 8.6% of kills carry it.
+
+    Read as a distance it is harmless in a maximum — but a parser that let it
+    through would report -1 for anyone whose only kills were melee, and -1 m
+    renders as a number rather than as an absence.
+    """
+    pairs = _corpus_pairs(10)
+    if not pairs:
+        pytest.skip("no archived corpus; run scripts/panic_archive.py")
+
+    seen_sentinel = False
+    for tele_path, _ in pairs:
+        ct = CombatTracker(0.0)
+        for e in reader.load(tele_path.read_bytes()):
+            ct.feed(e)
+        seen_sentinel |= any(
+            k.distance_cm is not None and k.distance_cm < 0 for k in ct.kills
+        )
+        for account in ct.players:
+            assert ct.longest_kill_cm(account) >= 0.0
+
+    assert seen_sentinel, "no -1 distances in the sample; the exclusion proves nothing"
+

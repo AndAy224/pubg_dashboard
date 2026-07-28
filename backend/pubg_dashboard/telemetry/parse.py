@@ -92,6 +92,7 @@ class ParseResult:
     heatmap_rows: list[dict[str, Any]]
     participant_updates: list[dict[str, Any]]
     weapon_rows: list[dict[str, Any]]
+    knock_rows: list[dict[str, Any]]
     strategy_rows: list[dict[str, Any]]
     unknown_events: dict[str, int] = field(default_factory=dict)
     duration_ms: int = 0
@@ -219,6 +220,7 @@ def parse_telemetry(
         heatmap_rows=heat.rows(),
         participant_updates=_participant_updates(combat, frames, roster, meta.t0_ms),
         weapon_rows=_weapon_rows(match_id, combat),
+        knock_rows=_knock_rows(match_id, combat),
         strategy_rows=compute_strategy(
             match_id=match_id,
             frames=frames,
@@ -557,6 +559,33 @@ def _kill_rows(match_id: str, combat: CombatTracker) -> list[dict[str, Any]]:
     ]
 
 
+def _knock_rows(match_id: str, combat: CombatTracker) -> list[dict[str, Any]]:
+    """`knock_events` rows, mirroring `_kill_rows`.
+
+    An empty list is the normal result for a solo match: `LogPlayerMakeGroggy`
+    does not exist in solo modes at all.
+    """
+    return [
+        {
+            "match_id": match_id,
+            "seq": seq,
+            "t_s": k.t_s,
+            "victim_account_id": k.victim_account_id,
+            "victim_team_id": k.victim_team_id,
+            "victim_is_bot": k.victim_is_bot,
+            "victim_x": k.victim_x,
+            "victim_y": k.victim_y,
+            "attacker_account_id": k.attacker_account_id,
+            "attacker_team_id": k.attacker_team_id,
+            "attacker_is_bot": k.attacker_is_bot,
+            "weapon": k.weapon,
+            "damage_reason": k.damage_reason,
+            "distance_cm": k.distance_cm,
+        }
+        for seq, k in enumerate(combat.knocks)
+    ]
+
+
 def _weapon_rows(match_id: str, combat: CombatTracker) -> list[dict[str, Any]]:
     """`participant_weapons` rows: per account, per weapon, what it did.
 
@@ -629,6 +658,13 @@ def _participant_updates(
                 # what a corpus test compares against forever.
                 "aws_shots": stats.aws_shots if stats else 0,
                 "aws_hits": stats.aws_hits if stats else 0,
+                # Computed since the parser was written and thrown away every
+                # time. Named apart from the API's own `damage_dealt`, which
+                # they will not exactly equal.
+                "damage_dealt_telemetry": stats.damage_dealt if stats else 0.0,
+                "blue_zone_damage": stats.blue_zone_damage if stats else 0.0,
+                "longest_kill_cm": combat.longest_kill_cm(account),
+                "revives_telemetry": stats.revives if stats else 0,
                 "landing_x": landing_x,
                 "landing_y": landing_y,
                 "landed_at_s": landed_at_s,

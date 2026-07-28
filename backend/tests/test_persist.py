@@ -71,7 +71,12 @@ async def session() -> AsyncIterator[AsyncSession]:
 
 
 def _result(
-    *, kills: int = 2, bin_count: int = 5, strategy: int = 2, weapons: int = 2
+    *,
+    kills: int = 2,
+    bin_count: int = 5,
+    strategy: int = 2,
+    weapons: int = 2,
+    knocks: int = 2,
 ) -> ParseResult:
     return ParseResult(
         match_id="m1",
@@ -103,6 +108,17 @@ def _result(
             for i in range(3)
         ],
         participant_updates=[],
+        knock_rows=[
+            {
+                "match_id": "m1", "seq": i, "t_s": float(i),
+                "victim_account_id": f"account.v{i}", "victim_team_id": 1,
+                "victim_is_bot": False, "victim_x": 1.0, "victim_y": 2.0,
+                "attacker_account_id": None, "attacker_team_id": None,
+                "attacker_is_bot": None, "weapon": None,
+                "damage_reason": None, "distance_cm": None,
+            }
+            for i in range(knocks)
+        ],
         weapon_rows=[
             {
                 "match_id": "m1", "account_id": f"account.v{i}", "weapon": "weapak47_c",

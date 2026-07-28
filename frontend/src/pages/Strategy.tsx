@@ -2,7 +2,13 @@ import { useEffect, useMemo, useState } from 'react'
 import { useQueries, useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router'
 import { get } from '../api/client'
-import type { PlayerCard, SquadMatchRow, StrategyMatchRow, WeaponStat } from '../api/types'
+import type {
+  PlayerCard,
+  SquadMatchRow,
+  StrategyBaseline,
+  StrategyMatchRow,
+  WeaponStat,
+} from '../api/types'
 import { Place, Skeleton } from '../components/ui'
 import { dateTime, distance, duration, gameMode, num, weaponName } from '../lib/format'
 import { contrastByPlacement, mergeWeapons, type Contrast } from '../lib/strategy'
@@ -22,12 +28,27 @@ type Row = StrategyMatchRow & { accountId: string }
  * `fmt` renders a mean, so it must tolerate fractional values of counters
  * (an average of 2.4 pickups is meaningful; "2.4" is the honest rendering).
  */
+/**
+ * `baseline` names the `/strategy/baseline` metric this card can be compared
+ * against, and is **deliberately absent** on the cards where it cannot.
+ *
+ * The baseline reports each metric in its stored unit. Three cards here do not
+ * show a stored unit: blue time is a share of time alive (raw seconds are
+ * confounded by survival — placing well means living longer means more chances
+ * to touch the blue), squad proximity is already a fraction rendered as a
+ * percent, and distance driven comes from `participants`, not
+ * `strategy_metrics`. Drawing a raw-seconds median under a percentage would be
+ * a comparison of two different quantities that looks like one quantity.
+ */
 const METRICS: {
   key: string
   label: string
   hint: string
   pick: (r: StrategyMatchRow) => number | null
   fmt: (v: number) => string
+  baseline?: string
+  /** Applied to the baseline value so it lands in the card's own units. */
+  baselineScale?: (v: number) => number
 }[] = [
   {
     key: 'blue',
@@ -47,6 +68,7 @@ const METRICS: {
     hint: 'health burned by the blue zone',
     pick: (r) => r.blueDamage,
     fmt: (v) => num(v),
+    baseline: 'blue_damage',
   },
   {
     key: 'rotate',
@@ -54,6 +76,7 @@ const METRICS: {
     hint: 'circle announced → you were inside it (mean per phase)',
     pick: (r) => r.rotateLagS,
     fmt: duration,
+    baseline: 'rotate_lag_s',
   },
   {
     key: 'mateDist',
@@ -61,6 +84,8 @@ const METRICS: {
     hint: 'mean distance to your nearest living teammate',
     pick: (r) => (r.teammateDistAvgCm === null ? null : r.teammateDistAvgCm / 100),
     fmt: distance,
+    baseline: 'teammate_dist_avg_cm',
+    baselineScale: (v) => v / 100,
   },
   {
     key: 'mateNear',
@@ -75,6 +100,7 @@ const METRICS: {
     hint: 'enemies landing within 200 m and ±60 s of you',
     pick: (r) => r.hotDropN,
     fmt: (v) => num(v, 1),
+    baseline: 'hot_drop_n',
   },
   {
     key: 'firstFight',
@@ -82,6 +108,7 @@ const METRICS: {
     hint: 'first hit, knock or kill you were on either end of',
     pick: (r) => r.firstEngageS,
     fmt: duration,
+    baseline: 'first_engage_s',
   },
   {
     key: 'earlyDmg',
@@ -89,6 +116,7 @@ const METRICS: {
     hint: 'aggression while the lobby is still full',
     pick: (r) => r.dmgDealtEarly,
     fmt: (v) => num(v),
+    baseline: 'dmg_dealt_early',
   },
   {
     key: 'firstWeapon',
@@ -96,6 +124,7 @@ const METRICS: {
     hint: 'seconds from touchdown to a gun in a slot',
     pick: (r) => r.firstWeaponS,
     fmt: duration,
+    baseline: 'first_weapon_s',
   },
   {
     key: 'pickups',
@@ -103,6 +132,7 @@ const METRICS: {
     hint: 'loot gathered right after the drop',
     pick: (r) => r.earlyPickupsN,
     fmt: (v) => num(v, 1),
+    baseline: 'early_pickups_n',
   },
   {
     key: 'ride',
@@ -154,6 +184,14 @@ export function Strategy() {
   const squad = useQuery({
     queryKey: ['strategy', 'squad'],
     queryFn: () => get<SquadMatchRow[]>('/strategy/squad'),
+  })
+
+  // The rest of the lobby, from rows the parser has always written for every
+  // participant and every endpoint here has always filtered away.
+  const baseline = useQuery({
+    queryKey: ['strategy', 'baseline'],
+    queryFn: () => get<StrategyBaseline>('/strategy/baseline'),
+    staleTime: 5 * 60_000,
   })
 
   const combined = selected === COMBINED
@@ -231,6 +269,7 @@ export function Strategy() {
               rows={data}
               contrast={contrastByPlacement(data, m.pick)}
               pick={m.pick}
+              lobby={lobbyMedian(baseline.data, m.baseline, m.baselineScale)}
             />
           ))}
         </div>
@@ -252,6 +291,25 @@ export function Strategy() {
   )
 }
 
+/**
+ * The lobby median for one card, in that card's units.
+ *
+ * Returns null rather than 0 wherever the comparison does not exist — no
+ * baseline mapped, the endpoint not loaded, or the metric measurable for
+ * nobody. A 0 would draw a bar saying "the lobby does none of this", which is
+ * a claim, not an absence.
+ */
+function lobbyMedian(
+  baseline: StrategyBaseline | undefined,
+  metric: string | undefined,
+  scale?: (v: number) => number,
+): number | null {
+  if (baseline === undefined || metric === undefined) return null
+  const row = baseline.metrics.find((m) => m.metric === metric)
+  if (row === undefined || row.median === null || row.n === 0) return null
+  return scale ? scale(row.median) : row.median
+}
+
 function MetricCard({
   label,
   hint,
@@ -261,6 +319,7 @@ function MetricCard({
   rows,
   contrast,
   pick,
+  lobby,
 }: {
   label: string
   hint: string
@@ -270,10 +329,13 @@ function MetricCard({
   rows: Row[]
   contrast: Contrast | null
   pick: (r: StrategyMatchRow) => number | null
+  /** Lobby median in this card's units, or null when there is nothing
+   *  comparable — see the note on `METRICS.baseline`. */
+  lobby: number | null
 }) {
   if (!contrast) return null
   const { best, worst } = contrast
-  const max = Math.max(best.mean ?? 0, worst.mean ?? 0)
+  const max = Math.max(best.mean ?? 0, worst.mean ?? 0, lobby ?? 0)
   return (
     <section className="card metric" title={hint}>
       <h3>{label}</h3>
@@ -292,6 +354,13 @@ function MetricCard({
           fmt={fmt}
           colour="var(--text-faint)"
         />
+        {/* The lobby, from strategy_metrics rows that exist for every
+            opponent because the parser walks the whole match anyway. Bots and
+            tracked players are excluded server-side — bots never rotate and
+            never contest a drop, so including them would flatter everyone. */}
+        {lobby !== null && (
+          <BarRow label="lobby" value={lobby} max={max} fmt={fmt} colour="var(--info)" />
+        )}
       </div>
       <ScatterStrip rows={rows} pick={pick} colourFor={colourFor} />
     </section>

@@ -409,6 +409,18 @@ async def match_kills(
             ),
             is_suicide=k.is_suicide,
             is_team_kill=k.is_team_kill,
+            damage_type=k.damage_type,
+            dbno_maker_account_id=k.dbno_maker_account_id,
+            # Resolved through the same `names` map the killer uses — it comes
+            # from a `participants` self-join, not from `players`, because ~19%
+            # of them are bots and bots have no `players` row at all.
+            dbno_maker_name=(
+                names.get(k.dbno_maker_account_id) if k.dbno_maker_account_id else None
+            ),
+            finisher_account_id=k.finisher_account_id,
+            finisher_name=(
+                names.get(k.finisher_account_id) if k.finisher_account_id else None
+            ),
             victim_x=k.victim_x,
             victim_y=k.victim_y,
             killer_x=k.killer_x,

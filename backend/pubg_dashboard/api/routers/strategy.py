@@ -12,14 +12,18 @@ filters `is_bot` explicitly.
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from typing import Annotated
+
+from fastapi import APIRouter, Query
 from sqlalchemy import desc, func, select
 
 from pubg_dashboard.api.deps import career_filter
 from pubg_dashboard.api.schemas import (
+    BaselineMetric,
     MatchStrategyRow,
     SquadMatchRow,
     SquadPlayerCohesion,
+    StrategyBaseline,
     StrategyMatchRow,
 )
 from pubg_dashboard.db.models import Match, Participant, Player, StrategyMetric
@@ -161,3 +165,82 @@ async def match_strategy(session: SessionDep, match_id: str) -> list[MatchStrate
         MatchStrategyRow(account_id=p.account_id, name=p.name, **_metrics(sm))
         for p, sm in rows
     ]
+
+
+@router.get("/strategy/baseline", response_model=StrategyBaseline)
+async def strategy_baseline(
+    session: SessionDep,
+    place_max: Annotated[int | None, Query(alias="placeMax", ge=1, le=100)] = None,
+) -> StrategyBaseline:
+    """What the rest of the lobby does — the comparison the page never had.
+
+    `strategy_metrics` already holds a row per participant, opponents included,
+    because the parser walks the whole match regardless. Every other endpoint
+    here filters to tracked players, so this data has been sitting unused.
+
+    Three exclusions, each of which changes the answer:
+
+    * **Bots.** 19% of participants. They never rotate, never loot properly and
+      never contest a drop, so including them flatters every human against a
+      lobby that does not exist.
+    * **Tracked players.** Otherwise the squad is compared partly against
+      itself.
+    * **Non-career match types**, via the same `career_filter` the stats use,
+      so this and the player's own rows are drawn from the same population.
+
+    `placeMax` narrows to finishers at or above a placement, which is what
+    turns the baseline from "what everyone does" into "what the people who beat
+    us do".
+
+    Quantiles are computed per metric with `percentile_cont`, and **`n` is
+    per metric too** — every column has a genuine "not measurable" case, and
+    `teammate_dist_avg_cm` is NULL for an entire solo lobby. One shared row
+    count would overstate all of them.
+    """
+    where = [
+        Participant.is_bot.is_(False),
+        # `tracked = false` is not the same question: `players` holds a row per
+        # human opponent too, so the anti-join is against tracked players
+        # specifically, not against the absence of a players row.
+        Participant.account_id.not_in(select(Player.account_id).where(Player.tracked)),
+    ]
+    if place_max is not None:
+        where.append(Participant.win_place <= place_max)
+
+    cols = []
+    for field in _METRIC_FIELDS:
+        col = getattr(StrategyMetric, field)
+        for q in (0.25, 0.5, 0.75):
+            cols.append(func.percentile_cont(q).within_group(col.asc()))
+        # count() of a nullable column counts non-NULLs, which is exactly the
+        # question here — but it is spelled explicitly so nobody reads it as
+        # the row count.
+        cols.append(func.count(col))
+
+    stmt = (
+        select(func.count(func.distinct(Participant.match_id)), *cols)
+        .select_from(StrategyMetric)
+        .join(
+            Participant,
+            (Participant.match_id == StrategyMetric.match_id)
+            & (Participant.account_id == StrategyMetric.account_id),
+        )
+        .join(Match, Match.match_id == StrategyMetric.match_id)
+        .where(career_filter(), *where)
+    )
+    row = (await session.execute(stmt)).one()
+
+    matches = int(row[0] or 0)
+    out: list[BaselineMetric] = []
+    for i, field in enumerate(_METRIC_FIELDS):
+        p25, median, p75, n = row[1 + i * 4 : 5 + i * 4]
+        out.append(
+            BaselineMetric(
+                metric=field,
+                p25=None if p25 is None else float(p25),
+                median=None if median is None else float(median),
+                p75=None if p75 is None else float(p75),
+                n=int(n or 0),
+            )
+        )
+    return StrategyBaseline(metrics=out, matches=matches, place_max=place_max)

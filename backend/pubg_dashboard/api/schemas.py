@@ -372,6 +372,25 @@ class KillRow(ApiModel):
     #: Display names of assisting players, already resolved.
     assists: list[str]
 
+    # --- stored since the parser was written, never previously served -------
+    #: e.g. `Damage_Gun`, `Damage_BlueZone`, `Damage_Explosion_Grenade`. This
+    #: is how a zone or fall death names itself when there is no killer.
+    damage_type: str | None
+    #: Who knocked the victim, and who landed the finishing blow. Both differ
+    #: from the credited killer often enough to matter: `dBNOMaker` is present
+    #: on 5,009 of 9,275 rows, and **51% of victims are still knocked at the
+    #: moment of death**, so "who won this fight" and "who got the kill" are
+    #: routinely different players.
+    dbno_maker_account_id: str | None
+    dbno_maker_name: str | None
+    finisher_account_id: str | None
+    finisher_name: str | None
+
+    # `through_wall` is deliberately **not** here. It is `False` on 9,275 of
+    # 9,275 rows and on 18,492 of 18,492 raw damage blocks — shipping it would
+    # ship a constant, which is the same defect as the always-zero red-zone
+    # fields in reverse.
+
 
 # ---------------------------------------------------------------------------
 # heatmap
@@ -528,3 +547,41 @@ class SquadMatchRow(ApiModel):
 class MatchStrategyRow(StrategyMetrics):
     account_id: str
     name: str
+
+
+class BaselineMetric(ApiModel):
+    """One metric's distribution across the lobby, for comparison."""
+
+    metric: str
+    p25: float | None
+    median: float | None
+    p75: float | None
+    #: Rows that had a value. **Per metric, not per row**: every metric here
+    #: has a real "not measurable" case (no landing, no teammates, no fights),
+    #: and in a solo match `teammate_dist_avg_cm` is NULL for the whole lobby.
+    #: A single shared row count would overstate every one of them.
+    n: int
+
+
+class StrategyBaseline(ApiModel):
+    """What the rest of the lobby does, from rows already being computed.
+
+    `strategy_metrics` has a row for **every** participant, including the
+    opponents — that is free, because the parser walks the whole match anyway.
+    Every strategy endpoint then filtered to tracked players, so the comparison
+    the page most wants was sitting in the table unused.
+    """
+
+    metrics: list[BaselineMetric]
+    #: Bots are excluded and this says so rather than leaving it to a comment.
+    #: They are 19% of participants, they never rotate, never loot properly and
+    #: never contest a drop — a baseline including them makes any human look
+    #: elite against a lobby that does not exist.
+    excludes_bots: bool = True
+    #: Tracked players are excluded too, so the squad is not compared partly
+    #: against itself.
+    excludes_tracked: bool = True
+    #: Matches contributing, and the placement band if one was requested.
+    matches: int
+    place_max: int | None = None
+

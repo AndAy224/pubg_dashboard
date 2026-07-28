@@ -20,7 +20,7 @@ import httpx
 import msgpack
 import pytest
 import pytest_asyncio
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.exc import SQLAlchemyError
 
 from pubg_dashboard.api.app import create_app
@@ -1040,3 +1040,86 @@ async def test_replay_bundle_is_not_double_compressed(
     assert r.headers["content-encoding"] == "gzip"
     bundle = msgpack.unpackb(r.content, raw=False)
     assert bundle["matchId"] == a_match
+
+
+async def test_baseline_excludes_bots_and_tracked_players(
+    client: httpx.AsyncClient,
+) -> None:
+    """The lobby baseline must be the *lobby*, not the lobby plus bots.
+
+    Bots are ~19% of participants and they never rotate, never loot properly
+    and never contest a drop, so a baseline including them makes any human
+    look elite against a lobby that does not exist. The filter is asserted by
+    counting rather than by reading the SQL, and — crucially — by checking
+    that removing it **changes the number**. A filter that makes no difference
+    is a filter that is not running.
+    """
+    r = await client.get("/api/strategy/baseline")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["excludesBots"] is True
+    assert body["excludesTracked"] is True
+
+    async with get_session() as session:
+        filtered = await session.scalar(
+            text(
+                """
+                select count(*)
+                from strategy_metrics sm
+                join participants p
+                  on p.match_id = sm.match_id and p.account_id = sm.account_id
+                join matches m on m.match_id = sm.match_id
+                where not p.is_bot
+                  and m.match_type = 'official'
+                  and p.account_id not in (select account_id from players where tracked)
+                """
+            )
+        )
+        unfiltered = await session.scalar(
+            text(
+                """
+                select count(*)
+                from strategy_metrics sm
+                join participants p
+                  on p.match_id = sm.match_id and p.account_id = sm.account_id
+                join matches m on m.match_id = sm.match_id
+                where m.match_type = 'official'
+                """
+            )
+        )
+    if not filtered:
+        pytest.skip("no strategy rows; reparse first")
+
+    assert unfiltered > filtered, "the bot/tracked filter changed nothing"
+    # `n` is per metric and every metric has a genuine "not measurable" case,
+    # so no metric may claim more rows than the filtered population.
+    for metric in body["metrics"]:
+        assert metric["n"] <= filtered, metric
+
+
+async def test_baseline_n_is_per_metric_not_per_row(client: httpx.AsyncClient) -> None:
+    """Every metric has its own "not measurable" case, so the counts differ.
+
+    `teammate_dist_avg_cm` is NULL for an entire solo lobby and
+    `rotate_lag_s` is NULL for anyone who died before the first circle. One
+    shared row count would overstate both.
+    """
+    body = (await client.get("/api/strategy/baseline")).json()
+    counts = {m["metric"]: m["n"] for m in body["metrics"]}
+    if not any(counts.values()):
+        pytest.skip("no strategy rows; reparse first")
+    assert len(set(counts.values())) > 1, counts
+
+
+async def test_baseline_place_max_narrows_to_better_finishers(
+    client: httpx.AsyncClient,
+) -> None:
+    """`placeMax` turns "what everyone does" into "what the winners do"."""
+    everyone = (await client.get("/api/strategy/baseline")).json()
+    top = (await client.get("/api/strategy/baseline", params={"placeMax": 10})).json()
+    if not everyone["matches"]:
+        pytest.skip("no strategy rows; reparse first")
+    by_metric = {m["metric"]: m for m in everyone["metrics"]}
+    for m in top["metrics"]:
+        assert m["n"] <= by_metric[m["metric"]]["n"], m["metric"]
+

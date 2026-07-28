@@ -220,6 +220,14 @@ export function Match() {
                       <span className="hs-glyph" title="headshot"> ◎</span>
                     )}
                     {k.isTeamKill && <span className="tag bad-tag">team kill</span>}
+                    {/* Shown only when the knock and the kill are different
+                        people. 51% of victims are still knocked at the moment
+                        of death, so the credited killer is often not who won
+                        the fight — and printing the knocker on every row would
+                        bury that in noise. */}
+                    {k.dbnoMakerName !== null && k.dbnoMakerAccountId !== k.killerAccountId && (
+                      <span className="faint small"> · knocked by {k.dbnoMakerName}</span>
+                    )}
                     {k.assists.length > 0 && (
                       <span className="faint small"> +{k.assists.join(', ')}</span>
                     )}

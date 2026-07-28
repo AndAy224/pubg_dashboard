@@ -103,7 +103,19 @@ BUNDLE_VERSION: Final = 1
 #:
 #:      Adds `participant_weapons` (migration 0006): per account, per weapon,
 #:      shots/landed/hits/dbno/headshots/damage. Delete-then-insert, no ledger.
-PARSER_VERSION: Final = 10
+#: 11 — knocks reach SQL, and four values the tracker had always computed and
+#:      thrown away are persisted. `knock_events` (migration 0007) is the half
+#:      of a squad fight `kill_events` cannot describe: **51% of kill victims
+#:      are still flagged `isDBNO` at the moment of death**, so a kill row
+#:      credits whoever finished someone, not whoever won the engagement.
+#:      Empty is normal — `LogPlayerMakeGroggy` does not exist in solo modes.
+#:
+#:      On `participants`: `damage_dealt_telemetry` (attacker-attributed only,
+#:      so it excludes the blue zone's 63% of damage events, and named apart
+#:      from PUBG's own `damage_dealt` because the two will differ),
+#:      `blue_zone_damage`, `longest_kill_cm` (already free of the -1
+#:      sentinel) and `revives_telemetry`.
+PARSER_VERSION: Final = 11
 
 DEFAULT_TICK_MS: Final = 100
 FALLBACK_TICK_MS: Final = 1000

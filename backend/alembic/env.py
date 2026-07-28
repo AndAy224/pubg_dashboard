@@ -52,6 +52,7 @@ HAND_MANAGED_INDEXES: frozenset[str] = frozenset(
         "ix_jobs_claim",  # partial: WHERE state = 'pending'
         "ix_kill_killer",  # partial: WHERE killer_account_id IS NOT NULL
         "ix_kill_weapon",  # partial: WHERE killer_account_id IS NOT NULL
+        "ix_knock_attacker",  # partial: WHERE attacker_account_id IS NOT NULL
     }
 )
 

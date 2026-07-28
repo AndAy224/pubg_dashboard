@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from pubg_dashboard.db.models import (
     HeatmapBin,
     KillEvent,
+    KnockEvent,
     Match,
     Participant,
     ParticipantWeapon,
@@ -87,6 +88,11 @@ async def persist_parse_result(
     for chunk in _chunks(result.strategy_rows):
         await session.execute(pg_insert(StrategyMetric).values(chunk))
 
+    # --- knock_events: same shape, same reasoning ---------------------------
+    await session.execute(delete(KnockEvent).where(KnockEvent.match_id == match_id))
+    for chunk in _chunks(result.knock_rows):
+        await session.execute(pg_insert(KnockEvent).values(chunk))
+
     # --- participant_weapons: same shape, same reasoning --------------------
     await session.execute(
         delete(ParticipantWeapon).where(ParticipantWeapon.match_id == match_id)
@@ -141,6 +147,10 @@ async def persist_parse_result(
                 shots_unknown_weapon=row["shots_unknown_weapon"],
                 aws_shots=row["aws_shots"],
                 aws_hits=row["aws_hits"],
+                damage_dealt_telemetry=row["damage_dealt_telemetry"],
+                blue_zone_damage=row["blue_zone_damage"],
+                longest_kill_cm=row["longest_kill_cm"],
+                revives_telemetry=row["revives_telemetry"],
                 # Telemetry is authoritative for bot-ness: `character.type ==
                 # 'user_ai'` also catches a bot PUBG handed a real-looking id,
                 # which the `ai.` prefix fallback would miss.

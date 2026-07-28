@@ -290,6 +290,21 @@ class Participant(Base):
     #: Attacks with an empty `weapon.itemId` (1.7% of the corpus). Persisted so
     #: that "the field moved" surfaces as this dropping to zero.
     shots_unknown_weapon: Mapped[int | None] = mapped_column(Integer)
+    # --- telemetry-derived combat totals (parser v11) ------------------------
+    #: Attacker-attributed damage only, so it excludes the blue zone — which is
+    #: 63% of all damage events. Named apart from `damage_dealt`, which is
+    #: PUBG's own figure: the two will differ, and two columns that disagree
+    #: and say so beat one that is quietly a blend of both.
+    damage_dealt_telemetry: Mapped[float | None] = mapped_column(Float)
+    #: Damage *taken* from the blue zone. Zone discipline that cost health
+    #: rather than time.
+    blue_zone_damage: Mapped[float | None] = mapped_column(Float)
+    #: CENTIMETRES, already filtered of the -1 "not applicable" sentinel that
+    #: 8.6% of kills carry, so this can be read directly.
+    longest_kill_cm: Mapped[float | None] = mapped_column(Float)
+    #: Revives performed, counted from telemetry rather than taken from the API.
+    revives_telemetry: Mapped[int | None] = mapped_column(Integer)
+
     #: PUBG's own `allWeaponStats` figures, kept rather than overwritten.
     #: Populated for ~3% of participants — a sparse oracle, but the only
     #: independent check on the derivation, and a corpus test compares the two
@@ -504,6 +519,62 @@ class StrategyMetric(Base):
     __table_args__ = (
         # The strategy page's scan: one player's rows across matches.
         Index("ix_strategy_account", "account_id", "match_id"),
+    )
+
+
+class KnockEvent(Base):
+    """One `LogPlayerMakeGroggy`, in SQL for the same reason kills are.
+
+    "Who knocks us and who finishes us" is a cross-match question, and the
+    knock is the half of a squad fight that `kill_events` cannot answer:
+    **51% of kill victims are still flagged `isDBNO` at the moment of death**,
+    so the kill row credits whoever finished a player, not whoever won the
+    engagement.
+
+    Delete-then-insert on `match_id`, like `kill_events`. Nothing here writes
+    to `heatmap_bins`, so no ledger is involved.
+
+    **Empty is normal.** `LogPlayerMakeGroggy` does not exist in solo modes at
+    all, so a match with zero rows is a solo match, not a parse failure.
+    """
+
+    __tablename__ = "knock_events"
+
+    match_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("matches.match_id", ondelete="CASCADE"), primary_key=True
+    )
+    seq: Mapped[int] = mapped_column(Integer, primary_key=True)
+    t_s: Mapped[float] = mapped_column(Float)
+
+    victim_account_id: Mapped[str] = mapped_column(String(64))
+    victim_team_id: Mapped[int] = mapped_column(Integer)
+    victim_is_bot: Mapped[bool] = mapped_column(Boolean, default=False)
+    victim_x: Mapped[float] = mapped_column(Float)  # CENTIMETRES
+    victim_y: Mapped[float] = mapped_column(Float)
+
+    # Nullable: a fall or a vehicle can knock someone with no attacker.
+    attacker_account_id: Mapped[str | None] = mapped_column(String(64))
+    attacker_team_id: Mapped[int | None] = mapped_column(Integer)
+    attacker_is_bot: Mapped[bool | None] = mapped_column(Boolean)
+
+    weapon: Mapped[str | None] = mapped_column(String(64))
+    damage_reason: Mapped[str | None] = mapped_column(String(24))
+    #: CENTIMETRES, and **-1 means "not applicable"** — the same sentinel
+    #: `kill_events.distance_cm` carries. Filter `> 0` in any "longest" query.
+    distance_cm: Mapped[float | None] = mapped_column(Float)
+
+    __table_args__ = (
+        Index("ix_knock_victim", "victim_account_id", "match_id"),
+        # Partial, mirroring ix_kill_killer — hand-written in the migration,
+        # because Alembic does not compare a partial index's WHERE predicate
+        # and autogenerate would emit a plain full index that silently
+        # replaces it.
+        Index(
+            "ix_knock_attacker",
+            "attacker_account_id",
+            "match_id",
+            postgresql_where=text("attacker_account_id IS NOT NULL"),
+        ),
     )
 
 

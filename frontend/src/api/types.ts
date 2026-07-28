@@ -320,6 +320,17 @@ export interface KillRow {
   killerY: number | null
   /** Already-resolved display names. */
   assists: string[]
+  /** How the damage was categorised — `Damage_Gun`, `Damage_BlueZone`,
+   *  `Damage_Explosion_Grenade`. How a killer-less death names itself. */
+  damageType: string | null
+  /** Who knocked, and who finished. Both differ from the credited killer
+   *  often enough to matter: 51% of victims are still knocked at the moment
+   *  of death, so "who won the fight" and "who got the kill" are routinely
+   *  different players. */
+  dbnoMakerAccountId: string | null
+  dbnoMakerName: string | null
+  finisherAccountId: string | null
+  finisherName: string | null
 }
 
 export interface Heatmap {
@@ -441,3 +452,24 @@ export interface MatchStrategyRow extends StrategyMetrics {
   accountId: string
   name: string
 }
+
+
+export interface BaselineMetric {
+  metric: string
+  p25: number | null
+  median: number | null
+  p75: number | null
+  /** Rows that had a value — **per metric**, not per row. Every metric has a
+   *  genuine "not measurable" case, and `teammateDistAvgCm` is null for an
+   *  entire solo lobby, so one shared count would overstate all of them. */
+  n: number
+}
+
+export interface StrategyBaseline {
+  metrics: BaselineMetric[]
+  excludesBots: boolean
+  excludesTracked: boolean
+  matches: number
+  placeMax: number | null
+}
+
