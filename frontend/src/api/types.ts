@@ -80,11 +80,17 @@ export interface PlayerStats {
   includeBots: boolean
 
   /**
-   * Σhits/Σshots — but **`shotsFired === 0` means "not reported", not
-   * "fired nothing"**. PUBG populates `allWeaponStats` for a median of 2
-   * accounts per match and for a tracked player in only 3 of 65 archived
-   * matches, so this is almost always absent. Render it only when
-   * `shotsFired > 0`; a headline 0% reads as a bug and is missing data.
+   * Σhits/Σshots, **derived from `LogPlayerAttack`** since parser v10.
+   *
+   * It used to come from PUBG's `allWeaponStats`, which exists for a median of
+   * two accounts per match — so it was absent for 97% of participants and
+   * `shotsFired === 0` had to be read as "not reported" rather than "fired
+   * nothing". Derived, it is present for ~92% of human participants, and a
+   * zero now genuinely means nobody pulled a trigger.
+   *
+   * These are **trigger pulls, not pellets**: PUBG counts nine "shots" for one
+   * Berreta686 blast, so a pellet-level ratio reads as several hundred percent
+   * accuracy on a shotgun.
    */
   accuracy: number
   shotsFired: number
@@ -208,6 +214,15 @@ export interface WeaponStat {
   headshots: number
   longestM: number
   avgDistanceM: number
+  /** Trigger pulls, and the ones that produced at least one attributed hit. */
+  shots: number
+  shotsLanded: number
+  /** Pellet-level hits — what PUBG's own `hits` counts. */
+  hitEvents: number
+  /** `shotsLanded / shots`, or null when the weapon was never fired. A weapon
+   *  can have kills and no shots: the finishing blow may be recorded under a
+   *  different causer than the one that did the shooting. */
+  accuracy: number | null
 }
 
 export interface ParticipantRow {

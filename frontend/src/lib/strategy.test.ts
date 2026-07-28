@@ -50,12 +50,23 @@ describe('contrastByPlacement', () => {
 })
 
 describe('mergeWeapons', () => {
-  const w = (weapon: string, kills: number, avgDistanceM: number, longestM = 100) => ({
+  const w = (
+    weapon: string,
+    kills: number,
+    avgDistanceM: number,
+    longestM = 100,
+    shots = 0,
+    shotsLanded = 0,
+  ) => ({
     weapon,
     kills,
     headshots: 1,
     longestM,
     avgDistanceM,
+    shots,
+    shotsLanded,
+    hitEvents: shotsLanded,
+    accuracy: shots > 0 ? shotsLanded / shots : null,
   })
 
   it('sums kills, maxes longest, and kill-weights the average range', () => {
@@ -78,5 +89,26 @@ describe('mergeWeapons', () => {
   it('keeps a zero-kill weapon without dividing by zero', () => {
     const merged = mergeWeapons([[w('A', 0, 0)], [w('A', 0, 0)]])
     expect(merged[0]!.avgDistanceM).toBe(0)
+  })
+
+  it('recomputes accuracy from summed totals rather than averaging percentages', () => {
+    // 1/1 = 100% and 10/100 = 10%. Averaging the two percentages gives 55%,
+    // which is what a three-shot cameo does to a three-hundred-shot game.
+    // The honest answer is 11 of 101.
+    const merged = mergeWeapons([[w('A', 0, 0, 0, 1, 1)], [w('A', 0, 0, 0, 100, 10)]])
+    expect(merged[0]!.shots).toBe(101)
+    expect(merged[0]!.shotsLanded).toBe(11)
+    expect(merged[0]!.accuracy).toBeCloseTo(11 / 101)
+  })
+
+  it('leaves accuracy null for a weapon nobody fired', () => {
+    // Not 0 — "never fired" and "fired and missed everything" are different
+    // statements, and this table has both.
+    expect(mergeWeapons([[w('A', 3, 50)]])[0]!.accuracy).toBeNull()
+  })
+
+  it('sorts by shots when kills tie, so a fired-but-killless weapon still ranks', () => {
+    const merged = mergeWeapons([[w('A', 0, 0, 0, 5, 1)], [w('B', 0, 0, 0, 50, 9)]])
+    expect(merged.map((m) => m.weapon)).toEqual(['B', 'A'])
   })
 })

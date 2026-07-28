@@ -86,7 +86,24 @@ BUNDLE_VERSION: Final = 1
 #:     number stayed a plausible percentage, and the unit test guarding it was
 #:     written from the same assumption as the code — the same shape as the
 #:     `shotsFired`/`hitCount` bug in v2 and the `LogArmorDestroy` bug in v8.
-PARSER_VERSION: Final = 9
+#: 10 — accuracy is **derived** instead of copied. `LogPlayerAttack` joined to
+#:      `LogPlayerTakeDamage` on `attackId` (throwable attackIds excluded, since
+#:      a throw emits both events under one id) reproduces PUBG's own
+#:      `allWeaponStats` per weapon at a median ratio of 1.000 for shots
+#:      (402 of 531 rows exact) and 1.000 for hits (444 of 453). But PUBG
+#:      reports it for a median of 2 accounts per match, so coverage goes from
+#:      **3.3% of human participants to 89.9%** — and a zero finally means
+#:      "fired nothing" rather than "not reported".
+#:
+#:      `shots_fired`/`shots_hit` are now **trigger pulls**, not pellets: PUBG
+#:      counts 90 shots for 10 Berreta686 attacks, so a pellet-level ratio
+#:      reads as several hundred percent accuracy on a shotgun. Pellet-level
+#:      hits are kept separately in `hit_events`. PUBG's own numbers move to
+#:      `aws_shots`/`aws_hits` and stay there as an oracle.
+#:
+#:      Adds `participant_weapons` (migration 0006): per account, per weapon,
+#:      shots/landed/hits/dbno/headshots/damage. Delete-then-insert, no ledger.
+PARSER_VERSION: Final = 10
 
 DEFAULT_TICK_MS: Final = 100
 FALLBACK_TICK_MS: Final = 1000

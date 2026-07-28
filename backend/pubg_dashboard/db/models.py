@@ -272,11 +272,31 @@ class Participant(Base):
     # Human-only kill count, which is what the default stat views show.
     kills_human: Mapped[int | None] = mapped_column(Integer)
     knocks_human: Mapped[int | None] = mapped_column(Integer)
-    # From LogMatchEnd.allWeaponStats, never re-derived: every throwable emits
-    # both LogPlayerAttack and LogPlayerUseThrowable under one attackId, so
-    # counting attack events double-counts them.
+    # Accuracy, derived from LogPlayerAttack joined to LogPlayerTakeDamage on
+    # attackId. These are **trigger pulls**, not pellets: PUBG reports 90
+    # "shots" for 10 Berreta686 attacks, so a pellet-level ratio reads as
+    # several hundred percent accuracy on a shotgun.
+    #
+    # The throwable objection that kept this un-derived for so long is real and
+    # measured — a throw emits both LogPlayerAttack and LogPlayerUseThrowable
+    # under one attackId, worth 4.7% — and it is removed by excluding those
+    # attackIds. Coverage goes from 3.3% of human participants to 89.9%, and a
+    # zero finally means "fired nothing" instead of "not reported".
     shots_fired: Mapped[int | None] = mapped_column(Integer)
     shots_hit: Mapped[int | None] = mapped_column(Integer)
+    #: Pellet-level: one per attributed damage event, so a shotgun blast that
+    #: lands six pellets is 6 here and 1 in `shots_hit`.
+    hit_events: Mapped[int | None] = mapped_column(Integer)
+    #: Attacks with an empty `weapon.itemId` (1.7% of the corpus). Persisted so
+    #: that "the field moved" surfaces as this dropping to zero.
+    shots_unknown_weapon: Mapped[int | None] = mapped_column(Integer)
+    #: PUBG's own `allWeaponStats` figures, kept rather than overwritten.
+    #: Populated for ~3% of participants — a sparse oracle, but the only
+    #: independent check on the derivation, and a corpus test compares the two
+    #: forever so a patch that changes LogPlayerAttack shows up as drift
+    #: instead of as a quietly wrong percentage.
+    aws_shots: Mapped[int | None] = mapped_column(Integer)
+    aws_hits: Mapped[int | None] = mapped_column(Integer)
     landing_x: Mapped[float | None] = mapped_column(Float)
     landing_y: Mapped[float | None] = mapped_column(Float)
     landed_at_s: Mapped[float | None] = mapped_column(Float)
@@ -484,6 +504,50 @@ class StrategyMetric(Base):
     __table_args__ = (
         # The strategy page's scan: one player's rows across matches.
         Index("ix_strategy_account", "account_id", "match_id"),
+    )
+
+
+class ParticipantWeapon(Base):
+    """Per-participant, per-weapon accuracy and damage.
+
+    Derived from `LogPlayerAttack` joined to `LogPlayerTakeDamage` on
+    `attackId`, so unlike PUBG's own `allWeaponStats` it exists for everyone
+    who fired rather than for a median of two accounts per match.
+
+    Delete-then-insert on `match_id`, exactly like `kill_events` and
+    `strategy_metrics`: the values are absolute per-match facts, nothing here
+    writes to `heatmap_bins`, and therefore **no heat ledger is involved**.
+
+    `weapon` is the lowercased `damageCauserName` spelling (`weaphk416_c`), so
+    it joins to `kill_events.weapon` case-insensitively. `''` is a real value:
+    1.7% of attacks carry no weapon id, and those shots are bucketed here
+    rather than dropped so the per-weapon rows reconcile against
+    `participants.shots_fired`.
+    """
+
+    __tablename__ = "participant_weapons"
+
+    match_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("matches.match_id", ondelete="CASCADE"), primary_key=True
+    )
+    # No FK, same reason as participants: bot ids are match-scoped.
+    account_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    weapon: Mapped[str] = mapped_column(String(64), primary_key=True)
+
+    #: Trigger pulls.
+    shots: Mapped[int] = mapped_column(Integer, default=0)
+    #: Trigger pulls that produced at least one attributed damage event.
+    shots_landed: Mapped[int] = mapped_column(Integer, default=0)
+    #: Attributed damage events — pellet-level.
+    hit_events: Mapped[int] = mapped_column(Integer, default=0)
+    #: Of those, the ones that landed on an already-knocked victim.
+    dbno_hit_events: Mapped[int] = mapped_column(Integer, default=0)
+    headshot_events: Mapped[int] = mapped_column(Integer, default=0)
+    damage: Mapped[float] = mapped_column(Float, default=0.0)
+
+    __table_args__ = (
+        # "This player's weapons, across matches" — the Player page's query.
+        Index("ix_participant_weapons_account", "account_id", "weapon"),
     )
 
 

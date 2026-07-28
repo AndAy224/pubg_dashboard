@@ -70,7 +70,9 @@ async def session() -> AsyncIterator[AsyncSession]:
     await eng.dispose()
 
 
-def _result(*, kills: int = 2, bin_count: int = 5, strategy: int = 2) -> ParseResult:
+def _result(
+    *, kills: int = 2, bin_count: int = 5, strategy: int = 2, weapons: int = 2
+) -> ParseResult:
     return ParseResult(
         match_id="m1",
         parser_version=1,
@@ -101,6 +103,14 @@ def _result(*, kills: int = 2, bin_count: int = 5, strategy: int = 2) -> ParseRe
             for i in range(3)
         ],
         participant_updates=[],
+        weapon_rows=[
+            {
+                "match_id": "m1", "account_id": f"account.v{i}", "weapon": "weapak47_c",
+                "shots": 10 + i, "shots_landed": 3, "hit_events": 4,
+                "dbno_hit_events": 1, "headshot_events": 1, "damage": 42.0,
+            }
+            for i in range(weapons)
+        ],
         strategy_rows=[
             {
                 "match_id": "m1", "account_id": f"account.v{i}",
@@ -243,3 +253,37 @@ async def test_reversal_does_not_leave_dead_zero_rows(session: AsyncSession) -> 
     total, rows, _ = await _totals(session)
     assert total == 0
     assert rows == 0, "zeroed bins should be swept, not left behind"
+
+
+async def test_weapon_rows_are_replaced_not_accumulated(session: AsyncSession) -> None:
+    """`participant_weapons` follows the same delete-then-insert shape.
+
+    Worth its own test rather than trusting the pattern: these are absolute
+    per-match counters, so an upsert that merely added would double every
+    player's shot count on each reparse — and an accuracy that stays the ratio
+    it was while both numerators and denominators double is invisible.
+    """
+    await persist_parse_result(
+        session, _result(weapons=4), replay_key="r", heat_ledger_key="h",
+        previous_ledger=None, was_parsed=False, map_name=MAP, match_type=MATCH_TYPE, day=DAY,
+    )
+    await session.commit()
+    assert await session.scalar(sql("SELECT count(*) FROM participant_weapons")) == 4
+    assert await session.scalar(sql("SELECT sum(shots) FROM participant_weapons")) == 46
+
+    ledger = [("movement", "account.a", "squad-fpp", i, 0, 5) for i in range(3)]
+    await persist_parse_result(
+        session, _result(weapons=4), replay_key="r", heat_ledger_key="h",
+        previous_ledger=ledger, was_parsed=True, map_name=MAP, match_type=MATCH_TYPE, day=DAY,
+    )
+    await session.commit()
+    # Identical reparse: same rows, same totals. Not doubled.
+    assert await session.scalar(sql("SELECT count(*) FROM participant_weapons")) == 4
+    assert await session.scalar(sql("SELECT sum(shots) FROM participant_weapons")) == 46
+
+    await persist_parse_result(
+        session, _result(weapons=1), replay_key="r", heat_ledger_key="h",
+        previous_ledger=ledger, was_parsed=True, map_name=MAP, match_type=MATCH_TYPE, day=DAY,
+    )
+    await session.commit()
+    assert await session.scalar(sql("SELECT count(*) FROM participant_weapons")) == 1

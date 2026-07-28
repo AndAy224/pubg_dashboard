@@ -21,7 +21,14 @@ from pubg_dashboard.api.schemas import (
     WeaponStat,
 )
 from pubg_dashboard.config import get_settings
-from pubg_dashboard.db.models import KillEvent, Match, Participant, Player, Roster
+from pubg_dashboard.db.models import (
+    KillEvent,
+    Match,
+    Participant,
+    ParticipantWeapon,
+    Player,
+    Roster,
+)
 from pubg_dashboard.db.session import SessionDep
 from pubg_dashboard.ingest.tracking import (
     PlayerNameNotResolved,
@@ -461,16 +468,60 @@ async def player_weapons(
         )
     ).all()
 
-    return [
-        WeaponStat(
+    # Accuracy comes from a separate table and is merged here rather than
+    # joined, for two reasons. `kill_events.weapon` keeps PUBG's original
+    # casing (`WeapHK416_C`) while `participant_weapons.weapon` is lowercased,
+    # so a SQL join would need a functional index for a merge of a few dozen
+    # rows. And the two sets genuinely differ: **a weapon you fired 300 rounds
+    # of without a kill has no kill_events row at all**, and that is exactly
+    # the weapon whose accuracy is worth seeing.
+    fired = (
+        await session.execute(
+            select(
+                ParticipantWeapon.weapon,
+                func.sum(ParticipantWeapon.shots).label("shots"),
+                func.sum(ParticipantWeapon.shots_landed).label("landed"),
+                func.sum(ParticipantWeapon.hit_events).label("hit_events"),
+            )
+            .where(
+                ParticipantWeapon.account_id == account_id,
+                # `''` is the 1.7% of attacks with no weapon id. Kept in the
+                # table so the totals reconcile, but it has no row to be.
+                ParticipantWeapon.weapon != "",
+            )
+            .group_by(ParticipantWeapon.weapon)
+        )
+    ).all()
+    by_weapon = {w: (int(shot), int(land), int(hit)) for w, shot, land, hit in fired}
+
+    merged: dict[str, WeaponStat] = {}
+    for weapon, kills, hs, longest, avg in rows:
+        shots, landed, hit_events = by_weapon.pop(weapon.lower(), (0, 0, 0))
+        merged[weapon.lower()] = WeaponStat(
             weapon=weapon,
             kills=kills,
             headshots=hs,
             longest_m=float(longest) / 100.0,
             avg_distance_m=float(avg) / 100.0,
+            shots=shots,
+            shots_landed=landed,
+            hit_events=hit_events,
+            accuracy=(landed / shots) if shots else None,
         )
-        for weapon, kills, hs, longest, avg in rows
-    ]
+    for weapon, (shots, landed, hit_events) in by_weapon.items():
+        merged[weapon] = WeaponStat(
+            weapon=weapon,
+            kills=0,
+            headshots=0,
+            longest_m=0.0,
+            avg_distance_m=0.0,
+            shots=shots,
+            shots_landed=landed,
+            hit_events=hit_events,
+            accuracy=(landed / shots) if shots else None,
+        )
+
+    return sorted(merged.values(), key=lambda w: (-w.kills, -w.shots, w.weapon))[:limit]
 
 
 @router.get("/{account_id}/placements", response_model=list[PlacementBucket])

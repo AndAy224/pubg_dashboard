@@ -98,10 +98,15 @@ class PlayerStats(ApiModel):
     include_bots: bool
 
     # --- telemetry-derived, present on every parsed match ------------------
-    #: Σ`shots_hit` / Σ`shots_fired`, 0.0 when nothing was fired. Taken from
-    #: LogMatchEnd.allWeaponStats rather than counted from attack events —
-    #: every throwable emits both LogPlayerAttack and LogPlayerUseThrowable
-    #: under one attackId, so counting events double-counts them.
+    #: Σ`shots_hit` / Σ`shots_fired`, 0.0 when nothing was fired.
+    #:
+    #: **Derived from LogPlayerAttack** since parser v10, not copied from
+    #: LogMatchEnd.allWeaponStats — PUBG reports that for a median of two
+    #: accounts per match, so this used to be missing for 97% of participants
+    #: and every surface had to render 0 as "not reported". Throwables are
+    #: excluded by attackId, which is what makes counting attack events safe.
+    #:
+    #: These are **trigger pulls**, not pellets.
     accuracy: float
     shots_fired: int
     shots_hit: int
@@ -156,6 +161,20 @@ class WeaponStat(ApiModel):
     headshots: int
     longest_m: float
     avg_distance_m: float
+
+    # --- accuracy, derived from LogPlayerAttack (parser v10) ---------------
+    #: Trigger pulls, and trigger pulls that produced at least one attributed
+    #: damage event. Deliberately not pellets: PUBG counts 90 "shots" for 10
+    #: Berreta686 attacks, so a pellet ratio reads as several hundred percent
+    #: accuracy on a shotgun.
+    shots: int
+    shots_landed: int
+    #: Pellet-level hits, kept because it is what PUBG's own `hits` counts.
+    hit_events: int
+    #: `shots_landed / shots`, or None when the weapon was never fired — which
+    #: is a real case here: a weapon can appear with kills and no shots if the
+    #: kill was a finishing blow recorded under a different causer.
+    accuracy: float | None
 
 
 class TimeseriesPoint(ApiModel):

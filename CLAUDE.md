@@ -298,8 +298,8 @@ Full list: BUILD-SPEC §6 (34 of them) and HANDOFF §5. The ones that bite most:
   participants, and because the columns are NOT NULL, `count(shots_fired)`
   reported them fully populated. **`count()` of a non-nullable column proves
   nothing** — use `count(*) FILTER (WHERE col > 0)`. Coverage is also tiny:
-  PUBG reports it for ~2 accounts per match and a *tracked* player in 3 of 65,
-  so `shots_fired == 0` means "not reported", never "fired nothing".
+  PUBG reports it for ~2 accounts per match and a *tracked* player in 3 of 65.
+  **Since parser v10 it is no longer the source of accuracy** — see below.
 - **`dBNOHits` is a *subset* of `hits`, not an addend.** The parser summed them
   for its whole life, on the reading that `hits` meant standing targets and
   `dBNOHits` knocked ones. Measured: `dBNOHits <= hits` on **547 of 547**
@@ -310,6 +310,24 @@ Full list: BUILD-SPEC §6 (34 of them) and HANDOFF §5. The ones that bite most:
   `shots_fired` (0 rows of 9,041), so it stayed a plausible percentage, and the
   unit test guarding it was written from the same assumption as the code.
   Fixed in parser v9.
+- **Accuracy is derived, not copied (parser v10).** `LogPlayerAttack` joined to
+  `LogPlayerTakeDamage` on **`attackId`** reproduces PUBG's own per-weapon
+  numbers at a median ratio of 1.000 (402 of 531 rows exact for shots, 444 of
+  453 for hits) while covering **91.8% of human participants instead of 3.2%**.
+  Three things make it correct, and each is a corpus test:
+  - exclude attackIds that also appear in `LogPlayerUseThrowable` — a throw
+    emits both events under one id, worth 4.7%. Resolve **after** the pass;
+    they arrive in the same millisecond in either order.
+  - join on `(attackId, attacker)`, and count only the linked subset. ~120
+    attributed damage events per match have no attack, and `Damage_DBNO`
+    bleed-out ticks are self-attributed with `attackId: -1`.
+  - `shots_fired`/`shots_hit` are **trigger pulls, not pellets**. PUBG counts
+    90 shots for 10 Berreta686 attacks, so a pellet ratio reads as several
+    hundred percent accuracy on a shotgun. `PELLET_WEAPONS` exists only so a
+    test can assert nothing *outside* it behaves that way.
+
+  PUBG's own figures live on in `aws_shots`/`aws_hits` as a permanent oracle.
+  A zero in `shots_fired` now genuinely means "fired nothing".
 - **`LogWeaponFireCount.fireCount` is quantised to multiples of 10** and omits
   any weapon fired fewer than 10 times. It looks like an exact shot counter
   and is not — 99 real shots report as 120.

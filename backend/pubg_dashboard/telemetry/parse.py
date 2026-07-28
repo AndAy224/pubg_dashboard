@@ -91,6 +91,7 @@ class ParseResult:
     kill_rows: list[dict[str, Any]]
     heatmap_rows: list[dict[str, Any]]
     participant_updates: list[dict[str, Any]]
+    weapon_rows: list[dict[str, Any]]
     strategy_rows: list[dict[str, Any]]
     unknown_events: dict[str, int] = field(default_factory=dict)
     duration_ms: int = 0
@@ -138,6 +139,12 @@ def parse_telemetry(
         t = ts_ms(event.get("_D"))
         if t > last_ms:
             last_ms = t
+
+    # Attacks and their hits are joined by `attackId` after the pass, not
+    # during it: a throwable emits `LogPlayerAttack` and
+    # `LogPlayerUseThrowable` in the same millisecond in either order, so an
+    # attack cannot know whether it is a throw when it arrives.
+    combat.resolve_accuracy()
 
     # Kill/death/knock bins come from the combat tracker rather than the raw
     # stream, so `kill_events` and the heatmap can never disagree about where
@@ -211,6 +218,7 @@ def parse_telemetry(
         kill_rows=_kill_rows(match_id, combat),
         heatmap_rows=heat.rows(),
         participant_updates=_participant_updates(combat, frames, roster, meta.t0_ms),
+        weapon_rows=_weapon_rows(match_id, combat),
         strategy_rows=compute_strategy(
             match_id=match_id,
             frames=frames,
@@ -549,6 +557,32 @@ def _kill_rows(match_id: str, combat: CombatTracker) -> list[dict[str, Any]]:
     ]
 
 
+def _weapon_rows(match_id: str, combat: CombatTracker) -> list[dict[str, Any]]:
+    """`participant_weapons` rows: per account, per weapon, what it did.
+
+    Absolute values, so this is delete-then-insert like `kill_events` and
+    `strategy_metrics` — no heat ledger is involved and none is needed.
+
+    Rows with an empty weapon id are kept, not dropped: 1.7% of attacks carry
+    no `weapon.itemId`, and discarding them would leave the per-weapon table
+    quietly short of the participant totals it should reconcile against.
+    """
+    return [
+        {
+            "match_id": match_id,
+            "account_id": account,
+            "weapon": weapon,
+            "shots": w.shots,
+            "shots_landed": w.shots_landed,
+            "hit_events": w.hit_events,
+            "dbno_hit_events": w.dbno_hit_events,
+            "headshot_events": w.headshot_events,
+            "damage": w.damage,
+        }
+        for (account, weapon), w in sorted(combat.weapons.items())
+    ]
+
+
 def _participant_updates(
     combat: CombatTracker,
     frames: FrameIndex,
@@ -583,8 +617,18 @@ def _participant_updates(
                 "died_at_s": death.t_s if death else None,
                 "killer_account_id": death.killer_account_id if death else None,
                 "death_weapon": death.weapon if death else None,
+                # Derived from LogPlayerAttack, so populated for ~90% of human
+                # participants rather than the ~3% PUBG reports on. A zero here
+                # now means "fired nothing", which it never could before.
                 "shots_fired": stats.shots_fired if stats else 0,
                 "shots_hit": stats.shots_hit if stats else 0,
+                "hit_events": stats.hit_events if stats else 0,
+                "shots_unknown_weapon": stats.shots_unknown_weapon if stats else 0,
+                # PUBG's own figures, kept beside the derivation instead of
+                # replaced by it: a sparse oracle is still an oracle, and it is
+                # what a corpus test compares against forever.
+                "aws_shots": stats.aws_shots if stats else 0,
+                "aws_hits": stats.aws_hits if stats else 0,
                 "landing_x": landing_x,
                 "landing_y": landing_y,
                 "landed_at_s": landed_at_s,

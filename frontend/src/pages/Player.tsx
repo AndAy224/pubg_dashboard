@@ -191,18 +191,18 @@ export function Player() {
               value={duration(s.avgSurvivedS)}
               sub={`${num(s.assists)} assists · ${num(s.revives)} revives`}
             />
-            {/* Accuracy is shown only when PUBG actually reported it. It
-                populates `allWeaponStats` for ~2 accounts per match, so for
-                these three it exists in a handful of matches; a headline 0%
-                would read as a bug rather than as missing data. */}
+            {/* Derived from LogPlayerAttack since parser v10, so this is a
+                real number now rather than "not reported by PUBG" — that used
+                to be the honest answer for all but a handful of matches. A
+                zero here means nobody fired, which is a thing that happens. */}
             {s.shotsFired > 0 ? (
               <Tile
                 label="Accuracy"
                 value={`${(s.accuracy * 100).toFixed(1)}%`}
-                sub={`${num(s.shotsHit)} of ${num(s.shotsFired)} shots`}
+                sub={`${num(s.shotsHit)} of ${num(s.shotsFired)} shots hit`}
               />
             ) : (
-              <Tile label="Accuracy" value="—" sub="not reported by PUBG" />
+              <Tile label="Accuracy" value="—" sub="no shots fired" />
             )}
             <Tile
               label="Distance"
@@ -281,6 +281,7 @@ export function Player() {
                   <thead>
                     <tr>
                       <th>Weapon</th><th className="r">Kills</th><th className="r">HS</th>
+                      <th className="r">Shots</th><th className="r">Acc</th>
                       <th className="r">Longest</th><th className="r">Avg</th>
                     </tr>
                   </thead>
@@ -295,14 +296,18 @@ export function Player() {
                             <span className="faint"> {Math.round((w.headshots / w.kills) * 100)}%</span>
                           )}
                         </td>
-                        <td className="r num">{num(w.longestM)} m</td>
-                        <td className="r num dim">{num(w.avgDistanceM)} m</td>
+                        <td className="r num dim">{w.shots > 0 ? num(w.shots) : '—'}</td>
+                        <td className="r num">
+                          {w.accuracy === null ? '—' : `${(w.accuracy * 100).toFixed(1)}%`}
+                        </td>
+                        <td className="r num">{w.kills > 0 ? `${num(w.longestM)} m` : '—'}</td>
+                        <td className="r num dim">{w.kills > 0 ? `${num(w.avgDistanceM)} m` : '—'}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
-              {weapons.data?.length === 0 && <div className="empty">no kills recorded</div>}
+              {weapons.data?.length === 0 && <div className="empty">nothing fired yet</div>}
             </div>
 
             <div className="card">

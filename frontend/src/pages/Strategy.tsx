@@ -442,15 +442,16 @@ function SquadTable({ rows }: { rows: SquadMatchRow[] | undefined }) {
 
 function WeaponsTable({ rows }: { rows: WeaponStat[] | undefined }) {
   if (!rows) return <Skeleton h={120} />
-  if (rows.length === 0) return <div className="empty">no weapon kills recorded</div>
+  if (rows.length === 0) return <div className="empty">nothing fired yet</div>
   return (
     <table>
       <thead>
         <tr>
           <th>Weapon</th>
           <th className="num">Kills</th>
+          <th className="num">Shots</th>
+          <th className="num">Acc</th>
           <th className="num">Avg range</th>
-          <th className="num">Longest</th>
         </tr>
       </thead>
       <tbody>
@@ -458,8 +459,13 @@ function WeaponsTable({ rows }: { rows: WeaponStat[] | undefined }) {
           <tr key={w.weapon}>
             <td>{weaponName(w.weapon)}</td>
             <td className="num">{w.kills}</td>
-            <td className="num">{distance(w.avgDistanceM)}</td>
-            <td className="num">{distance(w.longestM)}</td>
+            <td className="num">{w.shots > 0 ? w.shots : '—'}</td>
+            {/* null, not 0: "never fired" and "fired and missed everything"
+                are different statements and this table contains both. */}
+            <td className="num">
+              {w.accuracy === null ? '—' : `${(w.accuracy * 100).toFixed(1)}%`}
+            </td>
+            <td className="num">{w.kills > 0 ? distance(w.avgDistanceM) : '—'}</td>
           </tr>
         ))}
       </tbody>

@@ -27,13 +27,71 @@ from typing import Any, Final
 from pubg_dashboard.telemetry import events as E
 from pubg_dashboard.telemetry.reader import norm, ts
 
-__all__ = ["CombatTracker", "DeathInfo", "Hit", "KillEvent", "PlayerCombat"]
+__all__ = [
+    "CombatTracker",
+    "DeathInfo",
+    "Hit",
+    "KillEvent",
+    "PlayerCombat",
+    "WeaponAccuracy",
+    "normalise_weapon_id",
+]
+
+#: Weapons where PUBG counts **pellets**, not trigger pulls.
+#:
+#: `allWeaponStats` reports 90 shots for 10 attack events with a Berreta686 —
+#: nine pellets each. Measured across the corpus, these are every causer whose
+#: attack count is under half its reported shot count; every other gun is 1:1.
+#: Launchers are here for the mirror-image reason (one attack, several
+#: reported rounds), which is the same arithmetic from the other side.
+#:
+#: Nothing in the parser branches on this. It exists so the corpus test can
+#: assert that **no weapon outside this set** behaves like a pellet weapon —
+#: a shotgun shipped next patch then fails the test instead of quietly
+#: reporting several hundred percent accuracy.
+PELLET_WEAPONS: Final = frozenset(
+    {
+        "weapberreta686_c",
+        "weapcrossbow_1_c",
+        "weapm79_c",
+        "weappanzerfaust100m1_c",
+        "weapsaiga12_c",
+        "weapsawnoff_c",
+        "weapwinchester_c",
+    }
+)
+
+
+def normalise_weapon_id(item_id: str | None) -> str:
+    """`LogPlayerAttack`'s item id -> the spelling every other source uses.
+
+    Three sources name the same gun three ways: the attack event carries
+    `Item_Weapon_M16A4_C`, `allWeaponStats` says `WeapM16A4_C`, and
+    `damageCauserName` (which `kill_events.weapon` already stores) also says
+    `WeapM16A4_C`. Lowercased, because every PUBG enum is open and casing has
+    moved between patches for all of them.
+
+    Verified against the corpus: all 55 distinct attack weapon ids normalise
+    onto the `allWeaponStats` vocabulary. The 11 `allWeaponStats` names that
+    have no attack counterpart are not guns at all — fists
+    (`PlayerMale_A_C`), grenades, molotovs, the blue zone and vehicles — and
+    none of them ever reports a non-zero shot count.
+
+    Returns `''` for a missing id, which is a real case: 1.7% of attack events
+    carry an empty `weapon.itemId`. Those are bucketed as unknown rather than
+    dropped, so the shot totals stay right even where the weapon is not.
+    """
+    s = item_id or ""
+    if s.startswith("Item_Weapon_"):
+        s = "Weap" + s[len("Item_Weapon_") :]
+    return s.lower()
 
 #: `distance` uses -1 to mean "not applicable", not "zero metres". Any
 #: "longest kill" query must filter `> 0` or a melee kill wins it.
 DISTANCE_NOT_APPLICABLE: Final = -1.0
 
 _BLUE_ZONE: Final = "damage_bluezone"
+_HEAD_SHOT: Final = "headshot"
 
 
 @dataclass(slots=True)
@@ -87,10 +145,35 @@ class PlayerCombat:
     #: that costs health rather than time — attacker-less, so it lives outside
     #: the attributed `hits` path entirely.
     blue_zone_damage: float = 0.0
+    #: Trigger pulls, from `LogPlayerAttack`, throwables excluded.
     shots_fired: int = 0
+    #: Trigger pulls that produced at least one attributed damage event.
     shots_hit: int = 0
+    #: Pellet-level hits — one per attributed damage event, so a shotgun blast
+    #: that lands six pellets counts six here and one in `shots_hit`.
+    hit_events: int = 0
+    #: Attacks whose `weapon.itemId` was empty (1.7% of the corpus). Counted
+    #: rather than dropped, and persisted, so "the field moved" shows up as
+    #: this going to zero instead of as a per-weapon table quietly going short.
+    shots_unknown_weapon: int = 0
+    #: What PUBG itself reported, kept beside the derivation rather than
+    #: replaced by it. Populated for ~3% of participants — see `_match_end`.
+    aws_shots: int = 0
+    aws_hits: int = 0
     #: The **last** death, not the first — see `CombatTracker.feed`.
     death: DeathInfo | None = None
+
+
+@dataclass(slots=True)
+class WeaponAccuracy:
+    """One `(account, weapon)` row of `participant_weapons`."""
+
+    shots: int = 0
+    shots_landed: int = 0
+    hit_events: int = 0
+    dbno_hit_events: int = 0
+    headshot_events: int = 0
+    damage: float = 0.0
 
 
 @dataclass(slots=True)
@@ -155,10 +238,38 @@ def _dmg(block: Mapping[str, Any] | None) -> dict[str, Any]:
 class CombatTracker:
     """Accumulates every combat outcome for one match."""
 
-    __slots__ = ("_t0_s", "hits", "kills", "knocks", "players", "revives", "unattributed_damage")
+    __slots__ = (
+        "_attacks",
+        "_landed",
+        "_t0_s",
+        "_thrown",
+        "hits",
+        "kills",
+        "knocks",
+        "players",
+        "revives",
+        "unattributed_damage",
+        "weapons",
+    )
 
     def __init__(self, t0_s: float) -> None:
         self._t0_s = t0_s
+        # attackId -> (attacker account, normalised weapon id).
+        #
+        # Collected rather than counted on sight, for two reasons that both
+        # come out of the wire's ordering. A throwable emits **both**
+        # `LogPlayerAttack` and `LogPlayerUseThrowable` under one attackId,
+        # same millisecond, in either order — so "is this attack a throw" is
+        # not answerable when the attack arrives. And a damage event has to
+        # find its attack, which means the attack has to still be around.
+        # ~6,000 entries per match; the memory is not worth optimising.
+        self._attacks: dict[int, tuple[str, str]] = {}
+        self._thrown: set[int] = set()
+        # attackId -> (hit events, dbno hits, headshots, damage). One attack
+        # can produce several damage events: a shotgun blast lands per pellet.
+        self._landed: dict[int, tuple[int, int, int, float]] = {}
+        #: `(account, weapon)` -> counters. Filled by `resolve_accuracy`.
+        self.weapons: dict[tuple[str, str], WeaponAccuracy] = {}
         self.kills: list[KillEvent] = []
         #: Attributed hits, for the replay's combat tracers.
         self.hits: list[Hit] = []
@@ -191,8 +302,31 @@ class CombatTracker:
             self._revive(event)
         elif kind == norm(E.PLAYER_TAKE_DAMAGE):
             self._damage(event)
+        elif kind == norm(E.PLAYER_ATTACK):
+            self._attack(event)
+        elif kind == norm(E.PLAYER_USE_THROWABLE):
+            attack_id = event.get("attackId")
+            if isinstance(attack_id, int):
+                self._thrown.add(attack_id)
         elif kind == norm(E.MATCH_END):
             self._match_end(event)
+
+    def _attack(self, event: Mapping[str, Any]) -> None:
+        """One trigger pull.
+
+        `attackId` is **match-unique** — measured at 30,148 attacks to 30,148
+        distinct ids across eight matches, and asserted by a corpus test,
+        because the whole hit join hangs off it.
+        """
+        attack_id = event.get("attackId")
+        if not isinstance(attack_id, int):
+            return
+        attacker = event.get("attacker") if isinstance(event.get("attacker"), Mapping) else None
+        account = str((attacker or {}).get("accountId") or "")
+        if not account:
+            return
+        weapon = event.get("weapon") if isinstance(event.get("weapon"), Mapping) else None
+        self._attacks[attack_id] = (account, normalise_weapon_id((weapon or {}).get("itemId")))
 
     def _kill_v2(self, event: Mapping[str, Any]) -> None:
         victim = event.get("victim") or {}
@@ -407,6 +541,28 @@ class CombatTracker:
             return
         self._player(attacker_account).damage_dealt += amount
 
+        # -- accuracy ---------------------------------------------------------
+        # **Recorded here, above the zero-damage guard below.** 27% of
+        # attributed damage events land 0 — armour absorption, and shots on an
+        # already-knocked victim — and a shot that did no damage is still a
+        # shot that hit. Dropping them here would understate accuracy by about
+        # a quarter and look entirely reasonable doing it.
+        #
+        # The join requires the attacker to match, not just the id to exist.
+        # attackIds are match-unique today, so this cannot currently fire — but
+        # PUBG has changed id semantics before, and if they ever became
+        # per-player counters an id-only join would cross-attribute silently.
+        attack_id = event.get("attackId")
+        record = self._attacks.get(attack_id) if isinstance(attack_id, int) else None
+        if record is not None and record[0] == attacker_account:
+            events_n, dbno_n, head_n, dmg = self._landed.get(attack_id, (0, 0, 0, 0.0))
+            self._landed[attack_id] = (
+                events_n + 1,
+                dbno_n + (1 if victim.get("isDBNO") else 0),
+                head_n + (1 if norm(str(event.get("damageReason") or "")) == _HEAD_SHOT else 0),
+                dmg + amount,
+            )
+
         # Record the geometry for the replay's combat tracers. Zero-damage
         # events are dropped: 27% of attributed damage events land 0 (armour
         # absorption, already-dead targets), and a tracer for a hit that did
@@ -489,9 +645,59 @@ class CombatTracker:
             for weapon in entry.get("stats") or []:
                 if not isinstance(weapon, Mapping):
                     continue
-                stats.shots_fired += int(weapon.get("shots") or 0)
+                stats.aws_shots += int(weapon.get("shots") or 0)
                 # `hits` already includes `dBNOHits`. Do not add them.
-                stats.shots_hit += int(weapon.get("hits") or 0)
+                stats.aws_hits += int(weapon.get("hits") or 0)
+
+    def resolve_accuracy(self) -> None:
+        """Turn the collected attacks and hits into per-player and per-weapon rows.
+
+        Deferred to the end of the pass rather than accumulated on sight,
+        because a throwable's `LogPlayerAttack` and `LogPlayerUseThrowable`
+        arrive in the same millisecond in either order — so an attack cannot
+        know at arrival whether it is a throw.
+
+        **This is what makes accuracy a real stat.** PUBG reports
+        `allWeaponStats` for a median of two accounts per match and for a
+        *tracked* player in three of 65, so `shots_fired` was populated for
+        3.3% of human participants and every UI treated 0 as "not reported".
+        Derived this way it is populated for **89.9%** — and the remaining 10%
+        are players who genuinely never fired, which is the first time the two
+        have been distinguishable.
+
+        Validated per weapon against the 531 `allWeaponStats` rows in the
+        corpus that report a shot: median derived/reported is **1.000** for
+        shots (402 of 531 exact) and **1.000** for hit events (444 of 453).
+        """
+        for attack_id, (account, weapon) in self._attacks.items():
+            if attack_id in self._thrown:
+                continue
+            stats = self._player(account)
+            stats.shots_fired += 1
+            if not weapon:
+                stats.shots_unknown_weapon += 1
+
+            row = self.weapons.get((account, weapon))
+            if row is None:
+                row = self.weapons[(account, weapon)] = WeaponAccuracy()
+            row.shots += 1
+
+            landed = self._landed.get(attack_id)
+            if landed is None:
+                continue
+            events_n, dbno_n, head_n, dmg = landed
+            # One trigger pull that connected, however many pellets landed.
+            # This is the pellet-independent measure and the one the UI shows:
+            # PUBG counts nine "shots" for one Berreta686 trigger pull, so a
+            # ratio of damage events to attacks reads as several hundred
+            # percent accuracy on a shotgun.
+            stats.shots_hit += 1
+            stats.hit_events += events_n
+            row.shots_landed += 1
+            row.hit_events += events_n
+            row.dbno_hit_events += dbno_n
+            row.headshot_events += head_n
+            row.damage += dmg
 
     # -- output -------------------------------------------------------------
     def longest_kill_cm(self, account: str) -> float:

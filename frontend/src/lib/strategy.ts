@@ -70,6 +70,10 @@ export interface WeaponTotals {
   headshots: number
   longestM: number
   avgDistanceM: number
+  shots: number
+  shotsLanded: number
+  hitEvents: number
+  accuracy: number | null
 }
 
 /**
@@ -78,6 +82,11 @@ export interface WeaponTotals {
  * Kills and headshots sum; longest is a max; average range is weighted by
  * kills — an unweighted mean would let one Winchester kill at 7 m drag a
  * hundred M24 kills toward it.
+ *
+ * Shots and landed shots sum, and **accuracy is recomputed from the summed
+ * totals**, never averaged. Averaging two players' percentages weights a
+ * three-shot cameo the same as a three-hundred-shot game, which is the same
+ * mistake the range column avoids in the other direction.
  */
 export function mergeWeapons(lists: readonly (readonly WeaponTotals[])[]): WeaponTotals[] {
   const byWeapon = new Map<string, WeaponTotals & { rangeKills: number }>()
@@ -96,10 +105,16 @@ export function mergeWeapons(lists: readonly (readonly WeaponTotals[])[]): Weapo
         cur.kills += w.kills
         cur.headshots += w.headshots
         cur.longestM = Math.max(cur.longestM, w.longestM)
+        cur.shots += w.shots
+        cur.shotsLanded += w.shotsLanded
+        cur.hitEvents += w.hitEvents
       }
     }
   }
   return [...byWeapon.values()]
-    .map(({ rangeKills: _unused, ...w }) => w)
-    .sort((a, b) => b.kills - a.kills)
+    .map(({ rangeKills: _unused, ...w }) => ({
+      ...w,
+      accuracy: w.shots > 0 ? w.shotsLanded / w.shots : null,
+    }))
+    .sort((a, b) => b.kills - a.kills || b.shots - a.shots)
 }

@@ -29,6 +29,7 @@ from pubg_dashboard.db.models import (
     KillEvent,
     Match,
     Participant,
+    ParticipantWeapon,
     StrategyMetric,
     utcnow,
 )
@@ -86,6 +87,13 @@ async def persist_parse_result(
     for chunk in _chunks(result.strategy_rows):
         await session.execute(pg_insert(StrategyMetric).values(chunk))
 
+    # --- participant_weapons: same shape, same reasoning --------------------
+    await session.execute(
+        delete(ParticipantWeapon).where(ParticipantWeapon.match_id == match_id)
+    )
+    for chunk in _chunks(result.weapon_rows):
+        await session.execute(pg_insert(ParticipantWeapon).values(chunk))
+
     # --- heatmap bins: reverse the old contribution, then add the new ------
     if previous_ledger:
         # `match_type` is not in the ledger because every bin a single match
@@ -129,6 +137,10 @@ async def persist_parse_result(
                 death_weapon=row["death_weapon"],
                 shots_fired=row["shots_fired"],
                 shots_hit=row["shots_hit"],
+                hit_events=row["hit_events"],
+                shots_unknown_weapon=row["shots_unknown_weapon"],
+                aws_shots=row["aws_shots"],
+                aws_hits=row["aws_hits"],
                 # Telemetry is authoritative for bot-ness: `character.type ==
                 # 'user_ai'` also catches a bot PUBG handed a real-looking id,
                 # which the `ai.` prefix fallback would miss.

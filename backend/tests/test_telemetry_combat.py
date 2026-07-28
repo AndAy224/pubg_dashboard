@@ -12,6 +12,7 @@ import collections
 import itertools
 import json
 import pathlib
+import statistics
 from collections.abc import Mapping
 from typing import Any
 
@@ -19,7 +20,7 @@ import pytest
 
 from pubg_dashboard.telemetry import events as E
 from pubg_dashboard.telemetry import reader
-from pubg_dashboard.telemetry.combat import CombatTracker
+from pubg_dashboard.telemetry.combat import PELLET_WEAPONS, CombatTracker
 from pubg_dashboard.telemetry.frames import (
     DEDUPE_MS,
     FLAG_ALIVE,
@@ -525,9 +526,11 @@ def test_accuracy_comes_from_all_weapon_stats() -> None:
             ],
         }
     )
-    assert ct.players["k"].shots_fired == 162
+    # These land in the *oracle* columns now. `shots_fired`/`shots_hit` are
+    # derived from LogPlayerAttack (parser v10) and mean trigger pulls.
+    assert ct.players["k"].aws_shots == 162
     # 8 + 3. NOT 13 — the two dBNOHits are already inside those hits.
-    assert ct.players["k"].shots_hit == 11
+    assert ct.players["k"].aws_hits == 11
 
 
 def test_the_old_field_names_are_not_silently_accepted() -> None:
@@ -548,8 +551,8 @@ def test_the_old_field_names_are_not_silently_accepted() -> None:
             ],
         }
     )
-    assert ct.players["k"].shots_fired == 0
-    assert ct.players["k"].shots_hit == 0
+    assert ct.players["k"].aws_shots == 0
+    assert ct.players["k"].aws_hits == 0
 
 
 # ---------------------------------------------------------------------------
@@ -636,10 +639,10 @@ def test_corpus_all_weapon_stats_produce_real_shot_counts() -> None:
         ct = CombatTracker(0.0)
         for e in evs:
             ct.feed(e)
-        with_stats = [p for p in ct.players.values() if p.shots_fired > 0]
+        with_stats = [p for p in ct.players.values() if p.aws_shots > 0]
         covered.append(len(with_stats))
-        total_shots += sum(p.shots_fired for p in with_stats)
-        total_hits += sum(p.shots_hit for p in with_stats)
+        total_shots += sum(p.aws_shots for p in with_stats)
+        total_hits += sum(p.aws_hits for p in with_stats)
 
     assert total_shots > 0, "allWeaponStats parsed to zero shots across the corpus"
     # Hits cannot exceed shots, and an accuracy of 100% would mean the two
@@ -713,7 +716,7 @@ def test_corpus_hits_are_not_summed_with_dbno_hits() -> None:
         ct = CombatTracker(0.0)
         for e in evs:
             ct.feed(e)
-        parsed += sum(p.shots_hit for p in ct.players.values())
+        parsed += sum(p.aws_hits for p in ct.players.values())
         for e in evs:
             if reader.norm(e.get("_T", "")) != reader.norm(E.MATCH_END):
                 continue
@@ -758,3 +761,270 @@ def test_corpus_double_deaths_are_real_and_common() -> None:
             if n > 1:
                 repeats[n] += 1
     assert sum(repeats.values()) > 0, "expected repeat deaths somewhere in the corpus"
+
+
+# ---------------------------------------------------------------------------
+# Derived accuracy (parser v10)
+# ---------------------------------------------------------------------------
+
+
+def _tracked(tele_path: pathlib.Path) -> CombatTracker:
+    """A fully fed, resolved tracker for one archived match."""
+    ct = CombatTracker(0.0)
+    for e in reader.load(tele_path.read_bytes()):
+        ct.feed(e)
+    ct.resolve_accuracy()
+    return ct
+
+
+def _aws_weapon_rows(tele_path: pathlib.Path) -> dict[tuple[str, str], tuple[int, int]]:
+    """PUBG's own per-weapon `(shots, hits)`, keyed the way the parser keys them."""
+    out: dict[tuple[str, str], tuple[int, int]] = {}
+    for e in reader.load(tele_path.read_bytes()):
+        if reader.norm(e.get("_T", "")) != reader.norm(E.MATCH_END):
+            continue
+        for entry in e.get("allWeaponStats") or []:
+            account = str(entry.get("accountId") or "")
+            for w in entry.get("stats") or []:
+                if not isinstance(w, Mapping):
+                    continue
+                out[(account, str(w.get("weapon") or "").lower())] = (
+                    int(w.get("shots") or 0),
+                    int(w.get("hits") or 0),
+                )
+    return out
+
+
+def test_attack_ids_are_match_unique() -> None:
+    """The precondition the entire hit join rests on.
+
+    Every attributed hit is found by looking its `attackId` up among the
+    attacks. If ids were per-player counters instead of match-unique, that
+    lookup would collide across shooters and cross-attribute hits — quietly,
+    and to plausible-looking numbers. Measured at 30,148 attacks to 30,148
+    distinct ids; asserted here so a change in PUBG's id semantics fails loudly.
+    """
+    pairs = _corpus_pairs(20)
+    if not pairs:
+        pytest.skip("no archived corpus; run scripts/panic_archive.py")
+
+    total = 0
+    for tele_path, _ in pairs:
+        events = reader.load(tele_path.read_bytes())
+        ids = [
+            e.get("attackId")
+            for e in events
+            if reader.norm(e.get("_T", "")) == reader.norm(E.PLAYER_ATTACK)
+        ]
+        assert len(ids) == len(set(ids)), f"{tele_path.name}: attackId collision"
+        total += len(ids)
+    assert total > 10_000, "no attacks parsed at all"
+
+
+def test_derived_shots_and_hits_match_pubgs_own_per_weapon() -> None:
+    """The derivation against PUBG's own numbers, weapon by weapon.
+
+    This is the check that matters: `allWeaponStats` is a wholly independent
+    account of the same match, so agreement is real evidence and not a
+    restatement of the parser's assumptions.
+
+    Pellet weapons are excluded because PUBG counts pellets while the parser
+    counts trigger pulls — see `PELLET_WEAPONS`, and the test below that stops
+    the exclusion list from being a place to hide a regression.
+    """
+    pairs = _corpus_pairs(20)
+    if not pairs:
+        pytest.skip("no archived corpus; run scripts/panic_archive.py")
+
+    shot_ratios: list[float] = []
+    hit_ratios: list[float] = []
+    shots_exact = hits_exact = 0
+    for tele_path, _ in pairs:
+        ct = _tracked(tele_path)
+        for (account, weapon), (aws_shots, aws_hits) in _aws_weapon_rows(tele_path).items():
+            if weapon in PELLET_WEAPONS or not weapon.startswith("weap"):
+                continue
+            row = ct.weapons.get((account, weapon))
+            if aws_shots:
+                mine = row.shots if row else 0
+                shot_ratios.append(mine / aws_shots)
+                shots_exact += mine == aws_shots
+            if aws_hits:
+                mine_h = row.hit_events if row else 0
+                hit_ratios.append(mine_h / aws_hits)
+                hits_exact += mine_h == aws_hits
+
+    assert len(shot_ratios) > 100, "too few oracle rows to conclude anything"
+    assert 0.98 <= statistics.median(shot_ratios) <= 1.02, statistics.median(shot_ratios)
+    assert 0.98 <= statistics.median(hit_ratios) <= 1.02, statistics.median(hit_ratios)
+    # Measured 402/531 and 444/453 over the full corpus. The bounds are well
+    # under that so ordinary drift does not fail the build, but a systematic
+    # break does.
+    assert shots_exact / len(shot_ratios) > 0.6, shots_exact / len(shot_ratios)
+    assert hits_exact / len(hit_ratios) > 0.85, hits_exact / len(hit_ratios)
+
+
+def test_no_weapon_outside_the_pellet_set_behaves_like_one() -> None:
+    """Keeps `PELLET_WEAPONS` from becoming a place regressions hide.
+
+    A shotgun shipped next patch reports ~9 pellets per trigger pull. Left off
+    the list it would sail through the test above by dragging one more ratio
+    towards 0.11 — and on the Player page it would read as a weapon with
+    several hundred percent accuracy, which looks like a rendering bug rather
+    than a parsing one. So the property is asserted directly: outside the known
+    set, nothing may look like a pellet weapon.
+    """
+    pairs = _corpus_pairs(20)
+    if not pairs:
+        pytest.skip("no archived corpus; run scripts/panic_archive.py")
+
+    offenders: list[str] = []
+    for tele_path, _ in pairs:
+        ct = _tracked(tele_path)
+        for (account, weapon), (aws_shots, _h) in _aws_weapon_rows(tele_path).items():
+            if weapon in PELLET_WEAPONS or not weapon.startswith("weap") or aws_shots < 20:
+                continue
+            row = ct.weapons.get((account, weapon))
+            if (row.shots if row else 0) / aws_shots < 0.5:
+                offenders.append(weapon)
+    assert not offenders, f"unlisted pellet-like weapons: {sorted(set(offenders))}"
+
+
+def test_throwables_are_not_counted_as_shots() -> None:
+    """The objection that kept accuracy un-derived, and its fix.
+
+    `models.py` used to state that counting attack events double-counts
+    throwables, because a throw emits both `LogPlayerAttack` and
+    `LogPlayerUseThrowable` under one `attackId`. That is true and worth 4.7%
+    corpus-wide — and it is removed by excluding exactly those ids.
+    """
+    pairs = _corpus_pairs(10)
+    if not pairs:
+        pytest.skip("no archived corpus; run scripts/panic_archive.py")
+
+    excluded = 0
+    for tele_path, _ in pairs:
+        events = reader.load(tele_path.read_bytes())
+        thrown = {
+            e.get("attackId")
+            for e in events
+            if reader.norm(e.get("_T", "")) == reader.norm(E.PLAYER_USE_THROWABLE)
+        }
+        attacks = {
+            e.get("attackId")
+            for e in events
+            if reader.norm(e.get("_T", "")) == reader.norm(E.PLAYER_ATTACK)
+        }
+        overlap = thrown & attacks
+        excluded += len(overlap)
+
+        ct = _tracked(tele_path)
+        derived = sum(p.shots_fired for p in ct.players.values())
+        assert derived == len(attacks - thrown), tele_path.name
+
+    assert excluded > 0, "no throwable shared an attackId with an attack; test proves nothing"
+
+
+def test_hits_are_exactly_the_attack_linked_non_self_damage_events() -> None:
+    """Pins the hit population, independently of how the parser computes it.
+
+    Two failure modes it separates, both of which produce a believable
+    percentage:
+
+    * counting **all** attacker-attributed damage rather than the
+      attackId-linked subset — ~120 unlinked events per match survive the
+      self-damage filter, and including them inflates accuracy;
+    * counting self-damage. `Damage_DBNO` bleed-out ticks are attributed to
+      the victim as their own attacker, with `damage: 0.0` and
+      `attackId: -1`, and there are ~1,280 in a single match.
+
+    The oracle here is rebuilt from the raw stream by different code from the
+    parser's, so agreement is a real cross-check rather than a restatement.
+    """
+    pairs = _corpus_pairs(10)
+    if not pairs:
+        pytest.skip("no archived corpus; run scripts/panic_archive.py")
+
+    checked = 0
+    total_self_damage = 0
+    for tele_path, _ in pairs:
+        events = reader.load(tele_path.read_bytes())
+        thrown = {
+            e.get("attackId")
+            for e in events
+            if reader.norm(e.get("_T", "")) == reader.norm(E.PLAYER_USE_THROWABLE)
+        }
+        owner = {
+            e.get("attackId"): str((e.get("attacker") or {}).get("accountId") or "")
+            for e in events
+            if reader.norm(e.get("_T", "")) == reader.norm(E.PLAYER_ATTACK)
+        }
+
+        expected = 0
+        self_damage = 0
+        for e in events:
+            if reader.norm(e.get("_T", "")) != reader.norm(E.PLAYER_TAKE_DAMAGE):
+                continue
+            attacker = str((e.get("attacker") or {}).get("accountId") or "")
+            victim = str((e.get("victim") or {}).get("accountId") or "")
+            if not attacker:
+                continue
+            if attacker == victim:
+                self_damage += 1
+                continue
+            aid = e.get("attackId")
+            if aid in thrown or owner.get(aid) != attacker:
+                continue
+            expected += 1
+
+        ct = _tracked(tele_path)
+        assert sum(p.hit_events for p in ct.players.values()) == expected, tele_path.name
+        assert sum(w.hit_events for w in ct.weapons.values()) == expected, tele_path.name
+        checked += expected
+        total_self_damage += self_damage
+
+    assert checked > 1000, "too few hits to conclude anything"
+    # Only meaningful if the corpus really contains the population being
+    # excluded. Aggregated, not per match: a short match can legitimately have
+    # no self-damage at all, and the first one in the archive does not.
+    assert total_self_damage > 0, "no self-damage anywhere; the exclusion proves nothing"
+
+
+def test_derived_accuracy_covers_most_of_the_lobby() -> None:
+    """The whole point of the derivation, asserted as a number.
+
+    PUBG reports `allWeaponStats` for a median of two accounts per match, so
+    `shots_fired` was populated for 3.3% of human participants and every
+    surface had to treat 0 as "not reported". Derived, it is ~90%, and the
+    remainder genuinely never fired.
+
+    If this drops back towards the oracle's coverage, the join has broken and
+    accuracy has silently gone back to being missing for almost everyone.
+    """
+    pairs = _corpus_pairs(20)
+    if not pairs:
+        pytest.skip("no archived corpus; run scripts/panic_archive.py")
+
+    humans = derived = oracle = 0
+    for tele_path, _ in pairs:
+        events = reader.load(tele_path.read_bytes())
+        accounts = {
+            str((e.get("character") or {}).get("accountId") or "")
+            for e in events
+            if reader.norm(e.get("_T", "")) == reader.norm(E.PLAYER_CREATE)
+            and not E.is_bot(e.get("character") or {})
+        }
+        accounts.discard("")
+        ct = _tracked(tele_path)
+        humans += len(accounts)
+        for a in accounts:
+            stats = ct.players.get(a)
+            if stats and stats.shots_fired > 0:
+                derived += 1
+            if stats and stats.aws_shots > 0:
+                oracle += 1
+
+    assert humans > 500
+    assert oracle / humans < 0.10, "PUBG suddenly reports for everyone; re-read the docstring"
+    assert derived / humans > 0.80, f"coverage collapsed to {derived / humans:.1%}"
+
