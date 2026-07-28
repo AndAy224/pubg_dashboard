@@ -1,0 +1,28 @@
+[Unit]
+Description=PUBG dashboard watchdog (is anything about to be lost forever?)
+Documentation=file:///home/pubg/pubg_dashboard/HANDOFF.md
+# **A separate process on purpose.** The poller cannot report its own death,
+# and the API only does work when someone asks it to. PUBG discards match
+# history after ~14 days, so a poller that stops and is not noticed is the one
+# failure in this system that no amount of re-running can recover.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/pubg/pubg_dashboard/backend
+Environment=PATH=/home/pubg/.local/bin:/usr/local/bin:/usr/bin:/bin
+# Exits non-zero when a check fails, which is what makes OnFailure fire.
+ExecStart=/home/pubg/.local/bin/uv --directory /home/pubg/pubg_dashboard/backend run pubgd doctor
+
+# Something has to watch the watcher: if the watchdog itself fails to run,
+# nothing downstream would ever notice. The findings also live in `ops_alerts`
+# and `/api/health` reports how long ago this last completed, so a silent
+# watchdog is visible from the dashboard as well as from the journal.
+TimeoutStartSec=120s
+
+MemoryHigh=150M
+MemoryMax=250M
+
+NoNewPrivileges=true
+PrivateTmp=true

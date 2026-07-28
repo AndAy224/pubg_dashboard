@@ -153,7 +153,33 @@ async def parse_telemetry(ctx: IngestContext, match_id: str) -> None:
     Reads from object storage rather than the network: bumping
     `PARSER_VERSION` requeues every match and re-derives everything with no
     re-download, which is the entire reason raw telemetry is archived.
+
+    Failures are recorded on the match row and then **re-raised**. Until this
+    wrapper existed, `matches.parse_error` was write-only-NULL: cleared on
+    success by `persist_parse_result` and never populated by anything, so a
+    parse failure existed only in `jobs.last_error` — a table nobody looks at,
+    for a job that gets reaped.
     """
+    try:
+        await _parse_telemetry(ctx, match_id)
+    except Exception as exc:
+        # Its own session and its own try: if recording the error fails, the
+        # job must still fail. Swallowing here would turn a parse failure into
+        # a silent success, which is strictly worse than not recording it.
+        try:
+            async with ctx.sessionmaker() as session:
+                await session.execute(
+                    update(Match)
+                    .where(Match.match_id == match_id)
+                    .values(parse_error=repr(exc)[:2000])
+                )
+                await session.commit()
+        except Exception:
+            log.warning("telemetry.parse_error_not_recorded", match_id=match_id)
+        raise
+
+
+async def _parse_telemetry(ctx: IngestContext, match_id: str) -> None:
     from pubg_dashboard.ingest.persist import persist_parse_result
     from pubg_dashboard.storage.base import replay_key as replay_key_for
     from pubg_dashboard.storage.factory import get_storage

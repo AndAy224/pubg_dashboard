@@ -23,19 +23,40 @@ function IngestBadge() {
   })
   if (!data) return null
 
-  // Poller lag is the number that matters: PUBG drops match history after ~14
-  // days, so lag creeping up is the early warning for permanent loss.
-  const lag = data.pollerLagS
-  const stale = lag !== null && lag > 900
-  const broken = !data.db || !data.storage || data.queueFailed > 0
+  // **`alerts` decides, not the lag.** `pollerLagS` is min() of the poll ages
+  // with never-polled players excluded, so it reports the freshest player: it
+  // read 46 s in a live check while one tracked account was nine hours stale.
+  // `pubgd doctor` checks max() and NULLs, and puts what it finds here.
+  const alerts = data.alerts ?? []
+  const broken = !data.db || !data.storage || alerts.length > 0
+
+  // The watchdog cannot report its own death, so the API reports it instead.
+  // null means it has never run, which is a reason to look and not a blank.
+  const watchdog = data.watchdogAgeS
+  const watchdogStale = watchdog === null || watchdog > 1200
+
+  const title = [
+    `${data.matches} matches, ${data.parsed} parsed · parser v${data.parserVersion}`,
+    ...alerts.map((a) => `${a.kind}: ${a.detail}`),
+    watchdogStale
+      ? watchdog === null
+        ? 'watchdog has never run — enable pubgd-doctor.timer'
+        : `watchdog last ran ${Math.round(watchdog / 60)} min ago`
+      : null,
+  ]
+    .filter(Boolean)
+    .join('\n')
 
   return (
-    <div className="badge" title={`${data.matches} matches, ${data.parsed} parsed · parser v${data.parserVersion}`}>
-      <span className={`dot ${broken ? 'bad' : stale ? 'warn' : 'ok'}`} />
+    <div className="badge" title={title}>
+      <span className={`dot ${broken ? 'bad' : watchdogStale ? 'warn' : 'ok'}`} />
       <span className="num">{data.parsed}</span>
       <span className="faint">/{data.matches}</span>
       {data.queuePending > 0 && <span className="faint">· {data.queuePending} queued</span>}
-      {broken && <span className="bad">· check ingest</span>}
+      {/* Named, not "check ingest". An alert that does not say what is wrong
+          sends the reader to look in the wrong place. */}
+      {alerts.length > 0 && <span className="bad">· {alerts[0]!.kind.replace(/_/g, ' ')}</span>}
+      {alerts.length === 0 && watchdogStale && <span className="warn">· watchdog</span>}
     </div>
   )
 }

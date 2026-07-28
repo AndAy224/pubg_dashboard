@@ -56,7 +56,17 @@ HANDLERS: dict[str, Handler] = {}
 
 #: Modules imported by :func:`main` purely for their registration side effects.
 #: Missing ones are a warning, not a crash — the worker is useful with a subset.
-HANDLER_MODULES: tuple[str, ...] = ("pubg_dashboard.pipeline.handlers",)
+#:
+#: **Empty on purpose.** This used to name `pubg_dashboard.pipeline.handlers`,
+#: a module that has never existed. `load_handler_modules` swallows the
+#: ModuleNotFoundError and warns, so the only reason `pubgd worker` works is
+#: that `cli.py` builds the registry explicitly and never consults this — the
+#: console entry point would have dead-lettered every job it claimed.
+#:
+#: A wrong default that survives on an accident is worse than no default. With
+#: an empty tuple, `run_worker`'s existing "no job handlers registered" guard
+#: fires immediately and names the real problem.
+HANDLER_MODULES: tuple[str, ...] = ()
 
 
 # ---------------------------------------------------------------------------

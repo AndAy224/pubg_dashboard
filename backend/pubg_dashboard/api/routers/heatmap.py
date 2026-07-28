@@ -13,7 +13,7 @@ import datetime as dt
 from array import array
 from typing import Annotated, Final
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import and_, func, select
 
 from pubg_dashboard.api.schemas import Heatmap
@@ -90,6 +90,17 @@ async def heatmap(
     # spells "no filter", and letting it reach `IN ('')` would silently select
     # the everyone row while the caller believed it had named someone.
     accounts = [a for a in (account_id or []) if a]
+
+    # **Validated, not trusted.** An unknown kind used to select zero rows and
+    # return a full 256x256 grid of zeroes with `max: 0`, which is byte-for-byte
+    # what a real map nobody has ever died on looks like. `kind=kils` rendered
+    # as "no deaths here" rather than as a mistake — the same defect class as an
+    # error message naming a cause it has not checked.
+    if kind not in KINDS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"unknown heatmap kind {kind!r}; valid kinds are {', '.join(KINDS)}",
+        )
 
     where = [
         HeatmapBin.map_name == map_name,

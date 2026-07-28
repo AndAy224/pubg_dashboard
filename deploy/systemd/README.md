@@ -59,3 +59,30 @@ players combined.
   telemetry content. It took one full `POLL_INTERVAL_SECONDS`, not less,
   because `select_due_players` honours the per-player backoff rather than
   spending rate-limit budget on a player polled moments ago.
+
+## pubgd-doctor (timer)
+
+The watchdog. Runs every 5 minutes and answers one question: **is anything
+about to be lost forever?** PUBG discards match history after ~14 days, so a
+poller that stops and is not noticed is the only failure here that re-running
+cannot fix.
+
+```bash
+systemctl --user link "$PWD/deploy/systemd/pubgd-doctor.service"
+systemctl --user enable --now "$PWD/deploy/systemd/pubgd-doctor.timer"
+systemctl --user list-timers 'pubgd*'
+```
+
+It is a **separate process on purpose**: the poller cannot report its own
+death, and the API only does work when someone asks it to. Findings go to
+`ops_alerts`, `/api/health` serves them, and the command exits non-zero when
+anything is wrong so `OnFailure=` works if you add one.
+
+`pubgd doctor` runs the same checks by hand. Set `ALERT_WEBHOOK_URL` to also
+POST failures somewhere (ntfy, a Discord webhook) — the database row is the
+durable record, so a webhook failure is logged and swallowed.
+
+**Why the dashboard badge was not enough:** `/health`'s `pollerLagS` is
+`min(now() - last_polled_at)` with never-polled players excluded, which reports
+the *freshest* tracked player. Measured live, it read 46 s while an account had
+not been polled for nine hours. The doctor checks `max()` and NULLs.

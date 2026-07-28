@@ -1,0 +1,17 @@
+[Unit]
+Description=Run the PUBG dashboard watchdog every 5 minutes
+Documentation=file:///home/pubg/pubg_dashboard/HANDOFF.md
+
+[Timer]
+# Five minutes matches POLL_INTERVAL_SECONDS: any longer and the alert lags
+# the failure, any shorter and it re-checks state that cannot have changed.
+OnBootSec=2min
+OnUnitActiveSec=5min
+# Fire immediately if the box was asleep or the timer was disabled — the
+# question this answers ("is anything about to age out?") is exactly the
+# question you want answered first after downtime.
+Persistent=true
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

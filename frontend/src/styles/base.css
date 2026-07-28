@@ -351,3 +351,8 @@ code { font-family: var(--mono); background: var(--bg-inset); padding: 1px 5px; 
      heatmaps page puts one straight into the page grid. */
   .filters, .seg { overflow-x: auto; }
 }
+
+/* Alert text in the command bar. `.bad` already exists for failures; this is
+   the "look at this soon" step below it — a stale watchdog is not yet a
+   problem, it is the loss of the ability to see one. */
+.warn { color: var(--accent); }

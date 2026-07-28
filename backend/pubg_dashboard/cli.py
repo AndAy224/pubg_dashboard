@@ -39,6 +39,8 @@ from sqlalchemy.pool import NullPool
 
 from pubg_dashboard.config import Settings, get_settings
 from pubg_dashboard.db.models import Job, Match, Participant, Player, utcnow
+from pubg_dashboard.ops.doctor import Finding
+from pubg_dashboard.ops.retention import PruneCandidate
 
 # --------------------------------------------------------------------------- #
 # Vocabulary
@@ -1094,6 +1096,161 @@ async def _stats() -> None:
         _kv("", "  ".join(f"{state}={count}" for state, count in sorted(jobs_by_state)))
     else:
         _dim("  queue empty")
+
+
+# ---------------------------------------------------------------------------
+# doctor / retention
+# ---------------------------------------------------------------------------
+@app.command("doctor")
+def doctor_cmd() -> None:
+    """Check whether anything is about to be lost, and record what is wrong.
+
+    Meant for a systemd timer. It is a **separate process** deliberately: the
+    poller cannot report its own death, and the API only works when asked. Each
+    check opens or closes a row in `ops_alerts`, and `/api/health` serves them,
+    so a stalled poller becomes visible without anyone watching a badge.
+    """
+    findings = asyncio.run(_doctor())
+    bad = [f for f in findings if not f.ok]
+    for f in findings:
+        if f.ok:
+            _ok(f"{f.kind}: {f.detail}")
+        else:
+            _warn(f"{f.kind}: {f.detail}")
+    raise typer.Exit(1 if bad else 0)
+
+
+async def _doctor() -> list[Finding]:
+    from pubg_dashboard.ops.doctor import run_checks
+
+    async with _session() as session:
+        findings = await run_checks(session)
+        await session.commit()
+    await _post_webhook(findings)
+    return findings
+
+
+async def _post_webhook(findings: list[Finding]) -> None:
+    """Best effort. The database row is the durable record.
+
+    Failures are logged and swallowed on purpose: an alerting system that a
+    network problem can silence is not an alerting system, and the row is
+    already written by the time this runs.
+    """
+    url = get_settings().alert_webhook_url
+    bad = [f for f in findings if not f.ok]
+    if not url or not bad:
+        return
+    import httpx
+
+    body = "\n".join(f"{f.kind}: {f.detail}" for f in bad)
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            await client.post(url, content=body.encode())
+    except Exception as exc:
+        _dim(f"  webhook failed ({exc.__class__.__name__}); the alert row is still recorded")
+
+
+match_app = typer.Typer(help="Per-match maintenance.")
+app.add_typer(match_app, name="match")
+
+
+@match_app.command("rm")
+def match_rm(
+    match_id: str,
+    keep_telemetry: Annotated[
+        bool, typer.Option("--keep-telemetry", help="leave the raw telemetry in storage")
+    ] = False,
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="skip the confirmation")] = False,
+) -> None:
+    """Delete a match, reversing its heatmap contribution first.
+
+    `heatmap_bins` has no `match_id` and no foreign key, so the heat ledger in
+    object storage is the only record of what this match contributed. It is
+    read and reversed **before** the row is deleted; the other order orphans it
+    permanently and leaves every affected bin quietly too high.
+    """
+    if not yes:
+        typer.confirm(f"delete match {match_id} and everything derived from it?", abort=True)
+    asyncio.run(_match_rm(match_id, keep_telemetry))
+    _ok(f"deleted {match_id}")
+
+
+async def _match_rm(match_id: str, keep_telemetry: bool) -> None:
+    from pubg_dashboard.ops.retention import delete_match
+    from pubg_dashboard.storage.factory import get_storage
+
+    async with _session() as session:
+        await delete_match(session, get_storage(), match_id, keep_telemetry=keep_telemetry)
+        await session.commit()
+
+
+storage_app = typer.Typer(help="Object-storage maintenance.")
+app.add_typer(storage_app, name="storage")
+
+
+@storage_app.command("prune")
+def storage_prune(
+    days: Annotated[
+        int | None,
+        typer.Option("--days", help="override RAW_TELEMETRY_RETENTION_DAYS"),
+    ] = None,
+    apply: Annotated[
+        bool, typer.Option("--apply", help="actually delete; default is a dry run")
+    ] = False,
+) -> None:
+    """Expire raw telemetry older than the retention window.
+
+    Dry run by default, and it stays disabled by default (`0` days) because raw
+    telemetry is what lets a `PARSER_VERSION` bump re-derive the whole archive.
+
+    Never prunes a match below the head parser version: that match is due to be
+    reparsed, and pruning it means the reparse produces nothing while its heat
+    ledger is still subtracted — the contribution disappears from the heatmap
+    with no error anywhere.
+    """
+    retention = get_settings().raw_telemetry_retention_days if days is None else days
+    candidates = asyncio.run(_prune_candidates(retention))
+    if retention <= 0:
+        _dim("  retention disabled (0 days); nothing to do")
+        return
+    if not candidates:
+        _dim(f"  nothing older than {retention} days is eligible")
+        return
+    total = sum(c.bytes_ for c in candidates)
+    for c in candidates[:10]:
+        _dim(f"  {c.match_id}  {c.played_at:%Y-%m-%d}  {c.bytes_ / 1e6:.1f} MB")
+    if len(candidates) > 10:
+        _dim(f"  ... and {len(candidates) - 10} more")
+    if not apply:
+        _ok(f"dry run: {len(candidates)} object(s), {total / 1e6:.0f} MB — pass --apply")
+        return
+    asyncio.run(_prune_apply(candidates))
+    _ok(f"deleted {len(candidates)} object(s), {total / 1e6:.0f} MB")
+
+
+async def _prune_candidates(retention: int) -> list[PruneCandidate]:
+    from pubg_dashboard.ops.retention import prune_telemetry
+
+    async with _session() as session:
+        return await prune_telemetry(session, retention)
+
+
+async def _prune_apply(candidates: list[PruneCandidate]) -> None:
+    from sqlalchemy import update as sa_update
+
+    from pubg_dashboard.storage.factory import get_storage
+
+    storage = get_storage()
+    async with _session() as session:
+        for c in candidates:
+            await storage.delete(c.telemetry_key)
+            await session.execute(
+                sa_update(Match)
+                .where(Match.match_id == c.match_id)
+                .values(telemetry_key=None)
+            )
+        await session.commit()
 
 
 if __name__ == "__main__":  # pragma: no cover

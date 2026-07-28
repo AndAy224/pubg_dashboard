@@ -5,9 +5,11 @@ from __future__ import annotations
 from fastapi import APIRouter
 from sqlalchemy import func, select
 
-from pubg_dashboard.api.schemas import Health, MapInfo
+from pubg_dashboard.api.schemas import AlertRow, Health, MapInfo
 from pubg_dashboard.db.models import Job, Match, Player
 from pubg_dashboard.db.session import SessionDep
+from pubg_dashboard.ops.alerts import heartbeat_age_s, open_alerts
+from pubg_dashboard.ops.doctor import WATCHDOG_NAME
 from pubg_dashboard.telemetry.bundle import PARSER_VERSION
 from pubg_dashboard.telemetry.maps import (
     MAP_WORLD_SIZE,
@@ -65,9 +67,23 @@ async def health(session: SessionDep) -> Health:
     except Exception:
         storage_ok = False
 
+    alerts = await open_alerts(session)
+    watchdog_age = await heartbeat_age_s(session, WATCHDOG_NAME)
+
     return Health(
         db=True,
         storage=storage_ok,
+        alerts=[
+            AlertRow(
+                kind=a.kind,
+                detail=a.detail,
+                opened_at=a.opened_at,
+                last_seen_at=a.last_seen_at,
+                observations=a.observations,
+            )
+            for a in alerts
+        ],
+        watchdog_age_s=watchdog_age,
         matches=matches,
         parsed=parsed,
         queue_pending=pending,

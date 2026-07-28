@@ -28,6 +28,15 @@ class Settings(BaseSettings):
     pubg_default_shard: Shard = "steam"
     pubg_rate_limit_per_min: int = 10
     poll_interval_seconds: int = 300
+    #: `pubgd doctor` raises `poller_stalled` above this, or above four poll
+    #: intervals, whichever is larger. Four intervals rather than one because a
+    #: single slow cycle is not an incident.
+    alert_poller_lag_s: int = 1800
+    #: Optional POST target for alerts (ntfy, a Discord webhook). The database
+    #: row is the durable record; this is a courtesy and its failure is logged
+    #: and swallowed. An alerting system that can be taken down by the network
+    #: is not one.
+    alert_webhook_url: str = ""
     pubg_seed_players: Annotated[list[str], NoDecode] = Field(default_factory=list)
 
     # --- Database -----------------------------------------------------------

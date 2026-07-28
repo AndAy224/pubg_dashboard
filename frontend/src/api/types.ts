@@ -7,9 +7,31 @@ export interface Health {
   parsed: number
   queuePending: number
   queueFailed: number
-  /** Seconds since the stalest tracked player was polled, or null if never. */
+  /**
+   * Seconds since the **freshest** tracked player was polled — `min()` of the
+   * ages, with never-polled players excluded.
+   *
+   * A reasonable summary and a poor alarm. With one batched poll request it
+   * agrees with the stalest player while everything works, and diverges
+   * exactly when one account enters exponential backoff (up to six hours).
+   * Measured live: this read 46 s while a tracked player had not been polled
+   * for nine hours. **Use `alerts` to decide whether anything is wrong.**
+   */
   pollerLagS: number | null
   parserVersion: number
+  /** Everything currently wrong, from `ops_alerts`. Empty is the good case. */
+  alerts: AlertRow[]
+  /** Seconds since `pubgd doctor` last ran. **null is not "fine"** — never run
+   *  and stopped an hour ago are both reasons to look. */
+  watchdogAgeS: number | null
+}
+
+export interface AlertRow {
+  kind: string
+  detail: string
+  openedAt: string
+  lastSeenAt: string
+  observations: number
 }
 
 export interface MapInfo {

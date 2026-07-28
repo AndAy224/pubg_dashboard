@@ -672,3 +672,67 @@ class HeatmapBin(Base):
     __table_args__ = (
         Index("ix_heatmap_lookup", "map_name", "kind", "account_id", "match_type"),
     )
+
+
+# ---------------------------------------------------------------------------
+# Operational alerts
+# ---------------------------------------------------------------------------
+class OpsAlert(Base):
+    """A problem that is currently true, and how long it has been true.
+
+    **This exists because PUBG retains matches for ~14 days.** Every other
+    failure in this system is recoverable by re-running something; a poller
+    that stops and is not noticed for two weeks is permanent, unrecoverable
+    data loss. Nothing before this persisted or announced that state — the
+    frontend badge warned above 900 s to whoever happened to be looking at it.
+
+    One open row per `kind`, enforced by a **partial** unique index over
+    unresolved rows only, so an alert that keeps firing updates a counter
+    rather than filling the table. `resolved_at` closes it; the next occurrence
+    opens a new row, which keeps the history of distinct incidents.
+    """
+
+    __tablename__ = "ops_alerts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # poller_stalled | player_never_polled | queue_failed | storage_down
+    # | parse_failing | watchdog_stale
+    kind: Mapped[str] = mapped_column(String(32))
+    opened_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_seen_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    resolved_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    #: Human-readable, and it must say what was observed rather than guess at a
+    #: cause — an error that names a cause it has not checked sends the reader
+    #: somewhere else entirely.
+    detail: Mapped[str] = mapped_column(Text, default="")
+    #: How many checks have seen this alert still true.
+    observations: Mapped[int] = mapped_column(Integer, default=1, server_default=text("1"))
+
+    __table_args__ = (
+        # Partial UNIQUE over open alerts only. HAND-MANAGED: Alembic does not
+        # compare a partial index's WHERE predicate, so autogenerate would emit
+        # a plain UNIQUE(kind) that silently forbids ever recording a second
+        # incident of the same kind. See alembic/env.py.
+        Index(
+            "uq_ops_alerts_open",
+            "kind",
+            unique=True,
+            postgresql_where=text("resolved_at IS NULL"),
+        ),
+    )
+
+
+class OpsHeartbeat(Base):
+    """Last time a named background component reported in.
+
+    The watchdog cannot report its own death, so it stamps itself here and the
+    API answers "the watchdog has not run in N minutes". Something has to watch
+    the watcher, and the request-driven process is the only one in a position
+    to notice that a periodic one stopped.
+    """
+
+    __tablename__ = "ops_heartbeats"
+
+    name: Mapped[str] = mapped_column(String(32), primary_key=True)
+    at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+

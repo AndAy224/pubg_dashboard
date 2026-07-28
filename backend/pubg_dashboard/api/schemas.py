@@ -25,6 +25,16 @@ class ApiModel(BaseModel):
 # ---------------------------------------------------------------------------
 # health / maps
 # ---------------------------------------------------------------------------
+class AlertRow(ApiModel):
+    """One currently-true operational problem."""
+
+    kind: str
+    detail: str
+    opened_at: dt.datetime
+    last_seen_at: dt.datetime
+    observations: int
+
+
 class Health(ApiModel):
     db: bool
     storage: bool
@@ -32,11 +42,20 @@ class Health(ApiModel):
     parsed: int
     queue_pending: int
     queue_failed: int
-    #: Seconds since the stalest tracked player was polled. The number that
-    #: matters operationally: PUBG drops match history after ~14 days, so a
-    #: poller lag creeping upward is the early warning for permanent loss.
+    #: Seconds since the **freshest** tracked player was polled — `min()` of
+    #: the ages, with never-polled players excluded. A reasonable summary and a
+    #: poor alarm: it agrees with the stalest player while everything works and
+    #: diverges exactly when one account enters exponential backoff. Use
+    #: `alerts` for the alarm; `pubgd doctor` checks `max()` and NULLs.
     poller_lag_s: float | None
     parser_version: int
+    #: Everything currently wrong, from `ops_alerts`. Empty is the good case.
+    alerts: list[AlertRow] = []
+    #: Seconds since `pubgd doctor` last ran, or None if it never has. **None
+    #: is not "fine"** — a watchdog that has never run and one that stopped an
+    #: hour ago are both reasons to look. The API is the only component in a
+    #: position to notice that a periodic process stopped.
+    watchdog_age_s: float | None = None
 
 
 class MapInfo(ApiModel):

@@ -1468,3 +1468,85 @@ one match runs 17, 15, 8, 8, 9, 5, because the circle keeps getting smaller
 while players keep rotating into it.
 
 Cost: average bundle 134,508 → **134,794 bytes**, +0.2%.
+
+---
+
+## 27. Ingest failure is loud now — added 2026-07-28
+
+The highest-stakes gap in the project, and the only one where "we'll notice
+eventually" is not true: **PUBG discards match history after ~14 days.** Every
+other fault here is recoverable by re-running something. A poller that stops
+and nobody notices is permanent loss, and until now the only signal was a
+frontend badge whose threshold nobody was watching.
+
+### The badge was measuring the wrong thing
+
+`/health`'s `poller_lag_s` is `min(now() - last_polled_at)` filtered to
+`last_polled_at IS NOT NULL`. `min` of an *age* is the **freshest** player, not
+the stalest, and never-polled players are excluded entirely.
+
+While everything works those are the same number — one batched `GET /players`
+polls all three at once. They diverge exactly when one account enters
+exponential backoff, which reaches **six hours**. Demonstrated live: with one
+tracked player set nine hours stale, `pollerLagS` read **46 seconds** and the
+badge stayed green.
+
+### `pubgd doctor`, on a five-minute timer
+
+A **separate process**, and that is the design: the poller cannot report its
+own death and the API only works when asked. Five checks —
+
+* `poller_stalled` — `max()` of the poll ages, not `min()`
+* `player_never_polled` — the rows a lag calculation cannot see at all
+* `queue_failed` — dead-lettered jobs, by kind
+* `parse_failing` — fetched but unparsed for over an hour, or `parse_error` set
+* `telemetry_at_risk` — **the one this exists for**: matches with no archived
+  telemetry whose `played_at` is inside 4 days of the retention cliff
+
+Each opens or closes a row in `ops_alerts`, upserted through a **partial unique
+index over unresolved rows** (`uq_ops_alerts_open`, hand-written in migration
+0008 and registered in `HAND_MANAGED_INDEXES` — autogenerate would have emitted
+a plain `UNIQUE (kind)` that silently forbids ever recording a second
+incident). Resolution closes rather than deletes, so two outages an hour apart
+stay two facts.
+
+The watchdog also stamps its own heartbeat, because something has to watch the
+watcher, and `/api/health` reports how long ago it last ran. **`null` there is
+not "fine"** — never run and stopped an hour ago are both reasons to look.
+
+Verified end to end rather than by reading it: player set nine hours stale →
+`pubgd doctor` exits 1 and logs → the alert appears in `/api/health` with its
+detail → poll time restored → alert resolves → the row survives closed.
+
+### Also in this pass
+
+* **`matches.parse_error` was write-only-NULL.** Cleared on success by
+  `persist_parse_result` and populated by nothing, so a parse failure existed
+  only in `jobs.last_error`. `parse_telemetry` now records it and **re-raises**,
+  with the recording in its own try/except — swallowing there would turn a
+  parse failure into a silent success, which is strictly worse.
+* **`pubgd match rm`**, and the order is the whole feature. `heatmap_bins` has
+  no `match_id` and no foreign key, so the heat ledger in object storage is the
+  only record of what a match contributed. It is read and reversed *before* the
+  row is deleted; the other order orphans it permanently and leaves every
+  affected bin quietly too high. Refuses outright when a parsed match has no
+  ledger, exactly as `persist_parse_result` does.
+* **`pubgd storage prune`** finally reads `raw_telemetry_retention_days`, which
+  had been in the config since the beginning and had never been read by
+  anything. Dry run by default, disabled by default, and it **never prunes a
+  match below the head parser version** — that match is due for the next
+  reparse, and pruning it means the reparse yields nothing while its ledger is
+  still subtracted, so its heatmap contribution vanishes with no error. This
+  session alone spent four parser bumps, so that is not hypothetical.
+* **`queue/worker.py:HANDLER_MODULES`** named `pubg_dashboard.pipeline.handlers`,
+  a module that has never existed. `load_handler_modules` swallows the
+  ModuleNotFoundError and warns, so `pubgd worker` only ever worked because
+  `cli.py` builds the registry explicitly — the console entry point would have
+  dead-lettered every job it claimed. Now `()`, so the existing "no job handlers
+  registered" guard fires and names the real problem.
+* **`/api/heatmap?kind=`** was unvalidated. An unknown kind selected zero rows
+  and returned a full 256×256 grid of zeroes with `max: 0` — byte-for-byte what
+  a map nobody has died on looks like. `kind=kils` rendered as "no deaths here".
+  Now a 422 that lists the valid kinds.
+* **`logging.py`**, specced in BUILD-SPEC and never written. Console renderer on
+  a terminal, JSON under systemd where the journal is the only record.
