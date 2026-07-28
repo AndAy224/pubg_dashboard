@@ -61,6 +61,18 @@ const CRATE_R = 4
 const VEHICLE_R = 4
 
 /**
+ * On-screen height of a care-package icon, in pixels.
+ *
+ * Deliberately **larger than a player dot** (10 px), where the old square was
+ * the same size as one. Two reasons: a parachute-and-crate illustration needs
+ * more pixels to read as anything than a plain shape does — at 14 px it was a
+ * white blob — and there are at most ~14 crates in a match against a hundred
+ * players, so they can afford the space. A crate is a landmark, not a unit.
+ */
+const CRATE_ICON_PX = 22
+const CRATE_ICON_RARE_PX = 30
+
+/**
  * Health ring geometry, in world units before the counter-scale.
  *
  * The ring sits outside the dot rather than filling it, so the dot body keeps
@@ -137,6 +149,81 @@ function buildWheelTexture(app: Application): Texture | null {
   }
 }
 
+/** Texture-space half-extent of the crate glyphs. Drawn large, scaled down. */
+const CRATE_TX = 30
+
+/**
+ * **Fallback** care-package glyphs, drawn by hand and rasterised once.
+ *
+ * PUBG's own icons (`/crates/*.png`) are what normally ship; these exist for
+ * the case where those fail to load. Deliberately monochrome, so they can be
+ * tinted — PUBG's art is already red/blue/white and `tint` multiplies, so the
+ * real icons must never be tinted and rarity has to be shown by size.
+ *
+ * **A crate used to be a plain square, and so is a player dot.** Same shape,
+ * near enough the same size, differing only in hue — over satellite imagery
+ * that is itself yellow-brown through every town. That is not a hypothetical
+ * confusion: reading a screenshot of this very renderer, a cluster of
+ * team-coloured player squares was taken for care packages, and only the
+ * instrumented `crates: 0` counter settled it.
+ *
+ * Two glyphs, because a crate spends ~30 s falling and that is worth seeing:
+ * a parachute on the way down, a strapped box once it lands.
+ *
+ * Same construction as the steering wheel — white over a fat black pass, so
+ * `tint` (which multiplies) keeps the black as an outline while the white
+ * takes the crate's colour. That is what keeps both legible on bright town
+ * roofs *and* on near-black water.
+ *
+ * Returns null rather than throwing, and the caller falls back to squares: a
+ * glyph that cannot be rasterised is worth a worse marker, not a dead replay.
+ */
+function buildFallbackCrateTextures(
+  app: Application,
+): { crate: Texture; chute: Texture } | null {
+  try {
+    const box = new Graphics()
+    for (const [width, colour] of [
+      [12, 0x000000],
+      [5, 0xffffff],
+    ] as const) {
+      const h = CRATE_TX - width / 2
+      box.rect(-h, -h * 0.72, h * 2, h * 1.44).stroke({ width, color: colour })
+      // The strapping. Two bands across the lid is what reads as "supply
+      // crate" rather than "rectangle".
+      box.moveTo(-h * 0.34, -h * 0.72).lineTo(-h * 0.34, h * 0.72)
+      box.moveTo(h * 0.34, -h * 0.72).lineTo(h * 0.34, h * 0.72)
+      box.stroke({ width: width * 0.6, color: colour })
+    }
+
+    const chute = new Graphics()
+    for (const [width, colour] of [
+      [12, 0x000000],
+      [5, 0xffffff],
+    ] as const) {
+      const r = CRATE_TX - width / 2
+      // Canopy: a half-dome across the top.
+      chute.arc(0, 0, r, Math.PI, 0).stroke({ width, color: colour })
+      // Suspension lines converging on the load.
+      for (const dx of [-r, -r * 0.4, r * 0.4, r]) {
+        chute.moveTo(dx, 0).lineTo(0, r * 0.62)
+      }
+      chute.stroke({ width: width * 0.55, color: colour })
+      chute
+        .rect(-r * 0.3, r * 0.62, r * 0.6, r * 0.5)
+        .stroke({ width: width * 0.6, color: colour })
+    }
+
+    const opts = { resolution: 2, antialias: true } as const
+    return {
+      crate: app.renderer.generateTexture({ target: box, ...opts }),
+      chute: app.renderer.generateTexture({ target: chute, ...opts }),
+    }
+  } catch {
+    return null
+  }
+}
+
 interface Options {
   bundle: ReplayBundle
   tileBase: string
@@ -161,6 +248,8 @@ export class Renderer {
   private readonly trailLayer = new Graphics()
   private readonly tracerLayer = new Graphics()
   private readonly worldLayer = new Graphics()
+  /** Care-package sprites. A Container because these are glyphs, not shapes. */
+  private readonly crateLayer = new Container()
   private readonly dotLayer = new Container()
   private readonly labelLayer = new Container()
 
@@ -189,6 +278,16 @@ export class Renderer {
   private _headShotIndex: number | undefined
   /** Shared steering-wheel marker; null if it could not be rasterised. */
   private readonly wheelTexture: Texture | null
+  /**
+   * Shared crate art. PUBG's own icons once they load, hand-drawn glyphs until
+   * then, null only if even those could not be rasterised (then: squares).
+   *
+   * `tintable` is the difference that matters: PUBG's icons already carry
+   * their own colour and must be left alone, so rarity is size-only.
+   */
+  private crateTextures: { crate: Texture; chute: Texture; tintable: boolean } | null
+  /** Pooled crate sprites — at most ~14 per match, so grow-and-hide is enough. */
+  private readonly cratePool: Sprite[] = []
 
   /**
    * What the last frame actually put on the canvas.
@@ -234,6 +333,15 @@ export class Renderer {
     this.hpDrawn = new Int16Array(b.players.length).fill(-1)
     this.hpOut = new Uint8Array(b.players.length)
     this.statusOut = new Uint8Array(b.players.length)
+    const drawn = buildFallbackCrateTextures(app)
+    this.crateTextures = drawn && { ...drawn, tintable: true }
+    if (this.crateTextures === null) {
+      opts.onError?.('the care-package glyphs could not be built; crates stay squares')
+    }
+    // PUBG's own icons, swapped in when they arrive. Not awaited: the replay
+    // must not wait on two PNGs, and the hand-drawn glyph is already correct
+    // in the meantime.
+    void this.loadCrateArt()
     this.wheelTexture = buildWheelTexture(app)
     if (this.wheelTexture === null) {
       opts.onError?.('the in-vehicle marker could not be built; dots stay square')
@@ -248,6 +356,7 @@ export class Renderer {
       this.trailLayer,
       this.zoneLayer,
       this.worldLayer,
+      this.crateLayer,
       // Above the world markers so a tracer is never hidden by a care package,
       // below the dots so it never covers the people involved.
       this.tracerLayer,
@@ -881,23 +990,25 @@ export class Renderer {
       g.stroke({ width: 1.2 * inv, color: 0x9ab0c8, alpha: 0.5 * v.age })
     }
 
-    // Care packages. Hollow while falling, solid once landed — the spawn and
-    // landing ticks are ~30 s apart, and one square from `t` put a crate on
-    // the map half a minute before it existed.
-    for (const c of m.crates) {
-      const x = this.toWorld(c.x)
-      const y = this.toWorld(c.y)
-      // The red box is bigger as well as redder: it is the one people cross
-      // open ground for, so it should be findable at fit zoom.
-      const r = markerRadius(c.rare ? CRATE_R * 1.5 : CRATE_R, this.viewport.scale)
-      const colour = c.rare ? 0xff4d4d : 0xf0b429
-      if (c.rare) this.drawn.rareCrates++
-      g.rect(x - r, y - r, r * 2, r * 2)
-      if (c.falling) {
-        g.stroke({ width: 1.2 * inv, color: colour, alpha: 0.55 })
-      } else {
-        g.fill({ color: colour, alpha: 0.8 })
+    // Care packages: glyphs, drawn in `drawCrates`. Squares only if the
+    // textures could not be rasterised — a crate square is indistinguishable
+    // from a player dot, so it is a fallback and not a choice.
+    if (this.crateTextures === null) {
+      for (const c of m.crates) {
+        const x = this.toWorld(c.x)
+        const y = this.toWorld(c.y)
+        const r = markerRadius(c.rare ? CRATE_R * 1.5 : CRATE_R, this.viewport.scale)
+        const colour = c.rare ? 0xff4d4d : 0xf0b429
+        if (c.rare) this.drawn.rareCrates++
+        g.rect(x - r, y - r, r * 2, r * 2)
+        if (c.falling) {
+          g.stroke({ width: 1.2 * inv, color: colour, alpha: 0.55 })
+        } else {
+          g.fill({ color: colour, alpha: 0.8 })
+        }
       }
+    } else {
+      this.drawCrates(m.crates)
     }
 
     // Deaths. A tracked player's death is gold, like everywhere else.
@@ -914,6 +1025,92 @@ export class Renderer {
         color: tracked ? 0xffd400 : 0xff6b6b,
         alpha: tracked ? 0.95 : 0.7,
       })
+    }
+  }
+
+  /**
+   * Swap in PUBG's own care-package icons.
+   *
+   * `Promise.allSettled`, and a failure leaves the hand-drawn glyphs in place
+   * and *says so* — the old `Assets.load(...).catch(() => Texture.EMPTY)`
+   * pattern turned a missing asset into an invisible marker, and a crate that
+   * is not drawn is indistinguishable from a crate that is not there.
+   */
+  private async loadCrateArt(): Promise<void> {
+    const [chute, crate] = await Promise.allSettled([
+      Assets.load<Texture>('/crates/CarePackage_Flying.png'),
+      Assets.load<Texture>('/crates/CarePackage_Normal.png'),
+    ])
+    if (this.destroyed) return
+    if (chute.status === 'fulfilled' && crate.status === 'fulfilled') {
+      this.crateTextures = { crate: crate.value, chute: chute.value, tintable: false }
+    } else {
+      this.opts.onError?.(
+        "PUBG's care-package icons could not be loaded; using the drawn fallback",
+      )
+    }
+  }
+
+  /**
+   * Care packages as glyphs: a parachute while it falls, a crate once it lands.
+   *
+   * Sprites rather than `Graphics`, so the shape is rasterised once and every
+   * crate is a transform — and so a crate stops being the same square a player
+   * dot is. Counter-scaled like every other marker, so the glyph is a constant
+   * size on screen at any zoom.
+   *
+   * The red box is drawn larger as well as redder: it is the one people cross
+   * open ground for, so it has to be findable at fit zoom without hunting.
+   */
+  private drawCrates(
+    crates: readonly { x: number; y: number; falling: boolean; rare: boolean }[],
+  ): void {
+    const tx = this.crateTextures
+    if (tx === null) return
+    const inv = 1 / this.viewport.scale
+
+    for (let i = 0; i < crates.length; i++) {
+      const c = crates[i]!
+      let sprite = this.cratePool[i]
+      if (sprite === undefined) {
+        sprite = new Sprite()
+        this.cratePool[i] = sprite
+        this.crateLayer.addChild(sprite)
+      }
+      if (c.rare) this.drawn.rareCrates++
+
+      const texture = c.falling ? tx.chute : tx.crate
+      // Assigned before the size: `width` derives from the texture's own
+      // dimensions, so swapping afterwards would rescale the glyph.
+      if (sprite.texture !== texture) sprite.texture = texture
+
+      // **The map position is the crate, not the parachute.** PUBG's flying
+      // icon is 144x200 with the canopy above and the box in the bottom ~45%,
+      // so anchoring at the centre would hang the crate below where it
+      // actually lands. Anchored on the box instead, and the chute hangs over
+      // the drop point the way it does in the air.
+      sprite.anchor.set(0.5, c.falling ? 0.78 : 0.5)
+
+      // Aspect preserved rather than squared off: the flying icon is taller
+      // than it is wide, and forcing a square squashes the canopy.
+      const height = (c.rare ? CRATE_ICON_RARE_PX : CRATE_ICON_PX) * inv
+      const aspect = texture.width / texture.height
+      sprite.visible = true
+      sprite.position.set(this.toWorld(c.x), this.toWorld(c.y))
+      sprite.height = height
+      sprite.width = height * aspect
+
+      // **Only the fallback is tinted.** PUBG's icons already carry their own
+      // red/blue/white and `tint` multiplies, so tinting them would just
+      // darken them into mud. Rarity is size, which is the honest distinction
+      // anyway: PUBG's art does not separate a red box from a small drop.
+      sprite.tint = tx.tintable ? (c.rare ? 0xff4d4d : 0xf0b429) : 0xffffff
+      // A falling crate is not lootable yet, and the alpha says so before the
+      // parachute does.
+      sprite.alpha = c.falling ? 0.85 : 1
+    }
+    for (let i = crates.length; i < this.cratePool.length; i++) {
+      this.cratePool[i]!.visible = false
     }
   }
 
