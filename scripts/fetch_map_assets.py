@@ -4,9 +4,12 @@
 # ///
 """Download PUBG's map images and cut them into a webp tile pyramid.
 
-    uv run scripts/fetch_map_assets.py              # only maps in the archive
+    uv run scripts/fetch_map_assets.py              # only maps that were played
     uv run scripts/fetch_map_assets.py --all        # every known map
     uv run scripts/fetch_map_assets.py --map Baltic_Main --no-text
+
+The default asks the running API which maps have been played, not `data/`. See
+`maps_played()` for why the obvious local answer is the wrong one.
 
 Four things about `pubg/api-assets` that will waste an afternoon otherwise:
 
@@ -36,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
 import sys
 import time
@@ -47,6 +51,10 @@ from PIL import Image
 REPO_ROOT: Final = pathlib.Path(__file__).resolve().parent.parent
 OUT_DIR: Final = REPO_ROOT / "assets" / "maps"
 CACHE_DIR: Final = REPO_ROOT / "assets" / ".source"
+
+#: Asked which maps have been played. Same variable the frontend corpus test
+#: uses, so pointing both at another install takes one export.
+API_BASE: Final = os.environ.get("PUBGD_API_BASE", "http://127.0.0.1:8000")
 
 # The LFS media endpoint. `raw.githubusercontent.com` serves the pointer file.
 MEDIA_BASE: Final = "https://media.githubusercontent.com/media/pubg/api-assets/master/Assets/Maps"
@@ -173,7 +181,7 @@ def tile_map(
 
 
 def maps_in_archive() -> list[str]:
-    """Map codes actually present in the match archive."""
+    """Map codes in the on-disk raw archive. **Not** the full picture."""
     found: set[str] = set()
     match_dir = REPO_ROOT / "data" / "matches"
     for path in sorted(match_dir.glob("*.json")):
@@ -183,6 +191,31 @@ def maps_in_archive() -> list[str]:
         except Exception:  # noqa: BLE001 - a bad file should not stop discovery
             continue
     return sorted(found)
+
+
+def maps_played() -> tuple[list[str], str]:
+    """Map codes actually played, and where the answer came from.
+
+    The database is the only complete answer. `data/matches/` is a raw-payload
+    archive that lags it — a live install had 89 matches over three maps while
+    `data/` held 65 over two, so the default run reported "Baltic_Main,
+    Range_Main", exited 0, and built nothing for the Miramar match played that
+    afternoon. Nothing about that output says it is incomplete.
+
+    `GET /api/maps/played` is `SELECT DISTINCT map_name`, so it costs nothing
+    and needs no project install — this script deliberately stays runnable with
+    bare `uv run`. When the API is down the archive scan is still better than
+    quitting, but it is **announced**: a silent fallback is the original bug.
+    """
+    url = f"{API_BASE.rstrip('/')}/api/maps/played"
+    try:
+        resp = httpx.get(url, timeout=10.0)
+        resp.raise_for_status()
+        names = sorted({row["mapName"] for row in resp.json()})
+    except Exception as exc:  # noqa: BLE001 - any failure means fall back
+        why = f"{API_BASE} unreachable ({type(exc).__name__})"
+        return maps_in_archive(), f"data/matches/ — {why}, so this list may be stale"
+    return names, f"the API at {API_BASE}"
 
 
 def main() -> int:
@@ -199,11 +232,11 @@ def main() -> int:
     elif args.all:
         wanted = sorted(MAP_ASSET_BASE)
     else:
-        wanted = maps_in_archive()
+        wanted, source = maps_played()
         if not wanted:
-            print("no matches archived; pass --map or --all")
+            print(f"no matches found ({source}); pass --map or --all")
             return 1
-        print(f"maps present in the archive: {', '.join(wanted)}")
+        print(f"maps played, per {source}: {', '.join(wanted)}")
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     manifest_path = OUT_DIR / "manifest.json"

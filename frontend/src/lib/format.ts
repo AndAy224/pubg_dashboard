@@ -104,6 +104,10 @@ const CAUSERS: [needle: string, label: string][] = [
 const VEHICLES = [
   'dacia', 'uaz', 'buggy', 'coupe', 'motorbike', 'rony', 'mirado', 'scooter',
   'van', 'minibus', 'pickup', 'boat', 'aquarail', 'snowmobile', 'motorglider',
+  // The BRDM-2 carries no weapon, so it can only ever appear here as a
+  // roadkill. It arrives by blue flare rather than spawning on the map, which
+  // is why it took until the corpus grew to 89 matches to show up at all.
+  'brdm',
 ]
 
 /**

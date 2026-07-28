@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { get } from '../api/client'
-import type { Heatmap, PlayerCard, TileInfo } from '../api/types'
+import type { Heatmap, MapInfo, PlayerCard, TileInfo } from '../api/types'
 import { HeatmapCanvas } from '../components/HeatmapCanvas'
 import { MapView } from '../components/MapView'
 import { num } from '../lib/format'
@@ -45,6 +45,17 @@ export function Heatmaps() {
     queryFn: () => get<Record<string, TileInfo>>('/tiles/manifest.json'),
     staleTime: 10 * 60_000,
   })
+  // The picker needs both lists, and neither alone is right. The manifest
+  // holds every map that has been *tiled* — `--all` builds all twelve, so on
+  // its own it offers Karakin to people who have never played it, and offers
+  // legacy `Erangel_Main` as a second, permanently empty "Erangel".
+  // `/maps/played` holds every map that has been *played* — on its own it
+  // offers maps with no tiles to draw them on. The intersection is the answer.
+  const maps = useQuery({
+    queryKey: ['maps', 'played'],
+    queryFn: () => get<MapInfo[]>('/maps/played'),
+    staleTime: 10 * 60_000,
+  })
   const players = useQuery({
     queryKey: ['players', 'tracked'],
     queryFn: () => get<PlayerCard[]>('/players', { tracked: true }),
@@ -56,6 +67,10 @@ export function Heatmaps() {
 
   const [accountId, setAccountId] = useState('')
   const info = tiles.data?.[mapName]
+
+  // Played *and* tiled. Ordered by `/maps/played`, which sorts by map code, so
+  // the list is stable rather than in manifest insertion order.
+  const pickable = (maps.data ?? []).filter((m) => tiles.data?.[m.mapName])
 
   const trackedIds = (players.data ?? []).map((p) => p.accountId)
 
@@ -99,8 +114,8 @@ export function Heatmaps() {
 
       <div className="filters">
         <select value={mapName} onChange={(e) => setMapName(e.target.value)}>
-          {Object.values(tiles.data ?? {}).map((t) => (
-            <option key={t.mapName} value={t.mapName}>{t.display ?? t.mapName}</option>
+          {pickable.map((m) => (
+            <option key={m.mapName} value={m.mapName}>{m.display}</option>
           ))}
         </select>
 

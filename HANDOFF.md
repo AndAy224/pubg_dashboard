@@ -451,6 +451,34 @@ Two things were measured while diagnosing it, both worth keeping:
 
 Parser bumped to v2 for the fix (v3 for the heatmap change below).
 
+**4. `LogArmorDestroy` was read from a field it does not have.**
+Found 2026-07-23 while adding armor condition to the replay inventory. The
+event carries `attacker` and `victim` — **never `character`** — but
+`InventoryTracker.feed` derives its account from `character.accountId`, so
+every destroy read an empty account and fell through: 73 destroy events in a
+measured match, **0 `OP_ARMOR_DESTROY` deltas**, across the feature's whole
+life. The unit test passed the entire time because its fixture invented a
+`character` field — the same failure as #3, in the other direction: the
+fixture was written from the code's assumption instead of the wire's shape.
+
+Two adjacent facts, measured while fixing it:
+
+* **The engine emits `LogItemUnequip` for the destroyed piece 0–1 ms around
+  the destroy, in either sort order** (same-millisecond ordering is a
+  lottery). Unsuppressed, the destroyed helmet either leaks into `loose` as a
+  phantom item or wipes the slot the destroy is about to report on. The
+  parser now drops unequips within 100 ms of a matching destroy
+  (`suppressed_destroy_unequips` counts them).
+* **Telemetry carries no armor durability anywhere**, and it cannot be
+  reconstructed exactly: armor looted off a corpse keeps its unknown prior
+  wear, and hits on knocked players report `damage: 0` (285 of 288 zero-damage
+  protected gun hits in one match were DBNO victims). What *does* hold, fitted
+  over every clean destroy in the corpus: per-hit durability loss equals raw
+  damage — `damage / (1 − mitigation)` — median ~43 at every level, and the
+  fitted max durabilities contradict the wiki (Lv2 helmet ≈ 150, not 100).
+  So the replay ships an exact hit count plus a percent clearly labeled an
+  estimate (`OP_ARMOR_HIT`, parser v8), never a precise-looking durability.
+
 ---
 
 ## 13. UI overhaul, 2026-07-22

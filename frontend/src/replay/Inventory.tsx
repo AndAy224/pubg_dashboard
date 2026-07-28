@@ -16,6 +16,11 @@ const OP_DETACH = 6
 const OP_CLEAR = 7
 const OP_ARMOR_DESTROY = 8
 // OP_PROVENANCE (9) records where an item came from; it changes no state.
+// A protected hit on an equipped helmet/vest. `q` is the parser's estimated
+// remaining durability in percent — an estimate because telemetry carries no
+// durability at all: looted armor's prior wear is unknowable, and hits on
+// knocked players report zero damage. The *count* of these ops is exact.
+const OP_ARMOR_HIT = 10
 
 const SLOT_NAMES = [
   'Primary',
@@ -28,9 +33,21 @@ const SLOT_NAMES = [
   'Backpack',
 ]
 const SLOT_LOOSE = 0xff
+const SLOT_HELMET = 5
+const SLOT_VEST = 6
+
+interface SlotEntry {
+  item: string
+  attachments: string[]
+  /** Armor slots only: exact protected-hit count on this piece. */
+  hits?: number
+  /** Armor slots only: estimated remaining durability, 0-100. */
+  est?: number
+  destroyed?: boolean
+}
 
 interface Resolved {
-  slots: Map<number, { item: string; attachments: string[] }>
+  slots: Map<number, SlotEntry>
   loose: Map<string, number>
 }
 
@@ -47,7 +64,7 @@ interface Resolved {
  */
 function resolve(bundle: ReplayBundle, playerIndex: number, tickLimit: number): Resolved {
   const inv = bundle.inv
-  const slots = new Map<number, { item: string; attachments: string[] }>()
+  const slots = new Map<number, SlotEntry>()
   const loose = new Map<string, number>()
 
   for (let i = 0; i < inv.n; i++) {
@@ -75,12 +92,40 @@ function resolve(bundle: ReplayBundle, playerIndex: number, tickLimit: number): 
         else loose.delete(item)
         break
       case OP_EQUIP:
-        if (slot !== SLOT_LOOSE) slots.set(slot, { item, attachments: [] })
+        if (slot !== SLOT_LOOSE) {
+          const armor = slot === SLOT_HELMET || slot === SLOT_VEST
+          slots.set(slot, armor ? { item, attachments: [], hits: 0, est: 100 } : { item, attachments: [] })
+        }
         break
       case OP_UNEQUIP:
-      case OP_ARMOR_DESTROY:
-        if (slot !== SLOT_LOOSE) slots.delete(slot)
+        // Old bundles (parser < 8) still carry the engine unequip that
+        // brackets a destroy; never let it wipe a destroyed marker.
+        if (slot !== SLOT_LOOSE && !slots.get(slot)?.destroyed) slots.delete(slot)
         break
+      case OP_ARMOR_HIT: {
+        if (slot === SLOT_LOOSE) break
+        const entry = slots.get(slot)
+        if (entry && entry.item === item) {
+          entry.hits = (entry.hits ?? 0) + 1
+          entry.est = qty
+        } else {
+          // Hit on a piece whose equip predates the delta track (drift heal).
+          slots.set(slot, { item, attachments: [], hits: 1, est: qty })
+        }
+        break
+      }
+      case OP_ARMOR_DESTROY: {
+        if (slot === SLOT_LOOSE) break
+        const prev = slots.get(slot)
+        slots.set(slot, {
+          item: item || prev?.item || '',
+          attachments: [],
+          hits: prev?.hits,
+          est: 0,
+          destroyed: true,
+        })
+        break
+      }
       case OP_ATTACH: {
         // `a` is the host weapon, `b` the attachment.
         for (const entry of slots.values()) {
@@ -109,6 +154,14 @@ function resolve(bundle: ReplayBundle, playerIndex: number, tickLimit: number): 
     }
   }
   return { slots, loose }
+}
+
+/** Coarse on purpose: the underlying number is an estimate, and three buckets
+ *  survive its error bars where a precise percentage would lie. */
+function wearBucket(est: number): 'fresh' | 'worn' | 'critical' {
+  if (est >= 60) return 'fresh'
+  if (est >= 25) return 'worn'
+  return 'critical'
 }
 
 export function InventoryPanel({
@@ -154,10 +207,24 @@ export function InventoryPanel({
             return (
               <div className="inv-slot" key={slot}>
                 <span className="inv-slot-name faint">{name}</span>
-                <span className="inv-item">{itemName(entry.item)}</span>
+                <span className="inv-item">
+                  {itemName(entry.item)}
+                  {entry.destroyed && <b className="inv-armor-destroyed"> destroyed</b>}
+                </span>
                 {entry.attachments.length > 0 && (
                   <span className="inv-attach faint">
                     {entry.attachments.map((a) => itemName(a)).join(' · ')}
+                  </span>
+                )}
+                {!entry.destroyed && entry.est !== undefined && (entry.hits ?? 0) > 0 && (
+                  <span
+                    className="inv-armor faint"
+                    title="Durability is estimated — telemetry does not report it. Looted armor may carry unseen damage; the hit count is exact."
+                  >
+                    <span className="inv-armor-bar" data-wear={wearBucket(entry.est)}>
+                      <i style={{ width: `${entry.est}%` }} />
+                    </span>
+                    {entry.hits} {entry.hits === 1 ? 'hit' : 'hits'} · ~{wearBucket(entry.est)}
                   </span>
                 )}
               </div>

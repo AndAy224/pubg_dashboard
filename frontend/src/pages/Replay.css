@@ -67,6 +67,15 @@
 .replay .inv-slot-name { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; }
 .replay .inv-item { font-weight: 500; }
 .replay .inv-attach { grid-column: 2; font-size: 10px; }
+.replay .inv-armor { grid-column: 2; display: flex; align-items: center; gap: 6px; font-size: 10px; }
+.replay .inv-armor-bar {
+  width: 44px; height: 4px; border-radius: 2px; overflow: hidden;
+  background: var(--bg-inset); flex: none;
+}
+.replay .inv-armor-bar i { display: block; height: 100%; background: var(--accent); }
+.replay .inv-armor-bar[data-wear='worn'] i { background: #b8923d; }
+.replay .inv-armor-bar[data-wear='critical'] i { background: var(--bad); }
+.replay .inv-armor-destroyed { color: var(--bad); font-weight: 600; font-size: 10px; text-transform: uppercase; letter-spacing: .05em; }
 .replay .inv-group { display: flex; flex-wrap: wrap; gap: 4px; align-items: baseline; margin-top: 4px; }
 .replay .inv-pill {
   background: var(--bg-inset); border-radius: 10px; padding: 1px 7px; font-size: 11px;

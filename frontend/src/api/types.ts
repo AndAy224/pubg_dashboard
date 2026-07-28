@@ -21,7 +21,16 @@ export interface MapInfo {
   imageScale: number
 }
 
-export interface TileInfo extends MapInfo {
+/**
+ * One entry of `/tiles/manifest.json`.
+ *
+ * `display` is deliberately omitted: the manifest is written by
+ * `scripts/fetch_map_assets.py`, which has no display-name table, and the tile
+ * router only adds `tileUrl` and `pxPerMetre` on the way out. Declaring
+ * `extends MapInfo` promised a field the wire has never carried — a friendly
+ * map name has to come from `/maps` or `/maps/played`.
+ */
+export interface TileInfo extends Omit<MapInfo, 'display'> {
   sourcePx: number
   tilePx: number
   maxZoom: number

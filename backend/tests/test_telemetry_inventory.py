@@ -15,13 +15,17 @@ from pubg_dashboard.telemetry import events as E
 from pubg_dashboard.telemetry import reader
 from pubg_dashboard.telemetry.inventory import (
     OP_ADD_LOOSE,
+    OP_ARMOR_DESTROY,
+    OP_ARMOR_HIT,
     OP_CLEAR,
     OP_PROVENANCE,
     OP_SET_LOOSE,
+    OP_UNEQUIP,
     SLOT_BACKPACK,
     SLOT_HELMET,
     SLOT_PRIMARY1,
     SLOT_PRIMARY2,
+    SLOT_VEST,
     InventoryTracker,
     PlayerInventory,
 )
@@ -297,20 +301,118 @@ def test_all_three_backpack_spellings_map_to_one_slot(spelling: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# armour
+# armour — rules 11 and 12
 # ---------------------------------------------------------------------------
 
 
-def test_armor_destroy_empties_the_slot() -> None:
-    _, state = _run(
+def _destroy(t: str, item: dict, victim: str = "a") -> dict:
+    """A destroy carries `victim`, never `character` — the wire shape that the
+    old handler misread (73 events, 0 deltas on a real match)."""
+    return {
+        "_T": "LogArmorDestroy",
+        "_D": t,
+        "attacker": {"accountId": "attacker"},
+        "victim": {"accountId": victim},
+        "item": item,
+        "damageReason": "TorsoShot",
+        "damageTypeCategory": "Damage_Gun",
+    }
+
+
+def _hit(t: str, *, victim: str = "a", damage: float, reason: str = "TorsoShot",
+         category: str = "Damage_Gun") -> dict:
+    return {
+        "_T": "LogPlayerTakeDamage",
+        "_D": t,
+        "attacker": {"accountId": "attacker"},
+        "victim": {"accountId": victim, "health": 100},
+        "damage": damage,
+        "damageReason": reason,
+        "damageTypeCategory": category,
+    }
+
+
+def test_armor_destroy_is_victim_keyed_and_empties_the_slot() -> None:
+    helmet = _item("Item_Head_F_01_Lv2_C", sub="Headgear", cat="Equipment")
+    inv, state = _run(
         [
-            _ev("LogItemEquip", "2026-07-22T00:01:00.000Z",
-                item=_item("Item_Head_F_01_Lv2_C", sub="Headgear", cat="Equipment")),
-            _ev("LogArmorDestroy", "2026-07-22T00:01:30.000Z",
-                item=_item("Item_Head_F_01_Lv2_C", sub="Headgear", cat="Equipment")),
+            _ev("LogItemEquip", "2026-07-22T00:01:00.000Z", item=helmet),
+            _destroy("2026-07-22T00:01:30.000Z", helmet),
         ]
     )
     assert state["a"].slots[SLOT_HELMET] is None
+    assert OP_ARMOR_DESTROY in [d.op for d in inv.deltas]
+
+
+def test_destroy_adjacent_engine_unequip_is_suppressed() -> None:
+    """The engine unequips the destroyed piece 0-1 ms around the destroy.
+
+    Applied, the destroyed helmet leaks into `loose` as a phantom item — or,
+    when the same-millisecond order flips, wipes the slot the destroy op is
+    about to report on.
+    """
+    helmet = _item("Item_Head_F_01_Lv2_C", sub="Headgear", cat="Equipment")
+    for unequip_first in (True, False):
+        pair = [
+            _ev("LogItemUnequip", "2026-07-22T00:01:29.999Z", item=helmet),
+            _destroy("2026-07-22T00:01:30.000Z", helmet),
+        ]
+        inv, state = _run(
+            [_ev("LogItemEquip", "2026-07-22T00:01:00.000Z", item=helmet)]
+            + (pair if unequip_first else pair[::-1])
+        )
+        ops = [d.op for d in inv.deltas]
+        assert OP_UNEQUIP not in ops
+        assert OP_ARMOR_DESTROY in ops
+        assert inv.suppressed_destroy_unequips == 1
+        assert not state["a"].loose, "destroyed armor leaked into loose"
+
+
+def test_protected_hits_decrement_the_durability_estimate() -> None:
+    """Loss is raw damage — reported health damage un-mitigated — against the
+    corpus-fitted max. A Lv2 vest (max 235, mitigation 40%) hit for 60 health
+    loses 100 raw: 57% remains."""
+    vest = _item("Item_Armor_D_01_Lv2_C", sub="Vest", cat="Equipment")
+    inv, _ = _run(
+        [
+            _ev("LogItemEquip", "2026-07-22T00:01:00.000Z", item=vest),
+            _hit("2026-07-22T00:01:10.000Z", damage=60.0),
+        ]
+    )
+    hits = [d for d in inv.deltas if d.op == OP_ARMOR_HIT]
+    assert len(hits) == 1
+    assert hits[0].slot == SLOT_VEST
+    assert hits[0].quantity == 57
+
+
+def test_zero_damage_hit_on_a_knocked_victim_is_imputed() -> None:
+    """Hits on a DBNO victim report `damage: 0` (285 of 288 zero-damage
+    protected gun hits in one match) but still wear the armor down."""
+    vest = _item("Item_Armor_D_01_Lv2_C", sub="Vest", cat="Equipment")
+    inv, _ = _run(
+        [
+            _ev("LogItemEquip", "2026-07-22T00:01:00.000Z", item=vest),
+            _hit("2026-07-22T00:01:10.000Z", damage=0.0),
+        ]
+    )
+    hits = [d for d in inv.deltas if d.op == OP_ARMOR_HIT]
+    assert len(hits) == 1
+    assert hits[0].quantity == 83  # (235 - 40) / 235
+
+
+def test_unprotected_damage_does_not_touch_armor() -> None:
+    """Arm shots bypass armor, and the blue zone destroys no vests."""
+    vest = _item("Item_Armor_D_01_Lv2_C", sub="Vest", cat="Equipment")
+    inv, _ = _run(
+        [
+            _ev("LogItemEquip", "2026-07-22T00:01:00.000Z", item=vest),
+            _hit("2026-07-22T00:01:10.000Z", damage=30.0, reason="ArmShot"),
+            _hit("2026-07-22T00:01:11.000Z", damage=30.0, category="Damage_BlueZone",
+                 reason="NonSpecific"),
+            _hit("2026-07-22T00:01:12.000Z", damage=30.0, reason="HeadShot"),  # no helmet
+        ]
+    )
+    assert not [d for d in inv.deltas if d.op == OP_ARMOR_HIT]
 
 
 # ---------------------------------------------------------------------------
@@ -351,3 +453,38 @@ def test_corpus_survivors_hold_a_coherent_loadout() -> None:
         for key in s.slots.values():
             if key is not None:
                 assert key[0].startswith("Item_"), f"nonsense item id: {key[0]}"
+
+
+def test_corpus_armor_destroys_produce_deltas() -> None:
+    """Rule 11 against the wire: every match has ~50 LogArmorDestroy events,
+    and before the victim-keyed fix exactly zero of them produced a delta —
+    a fixture-invented unit test hid that for the feature's whole life."""
+    root = DATA / "telemetry"
+    files = sorted(root.glob("*.json.gz")) if root.is_dir() else []
+    if not files:
+        pytest.skip("no archived telemetry")
+    biggest = max(files, key=lambda p: p.stat().st_size)
+    evs = reader.load(biggest.read_bytes())
+    t0 = next(
+        (reader.ts_ms(e.get("_D")) for e in evs
+         if reader.norm(e.get("_T", "")) == reader.norm(E.MATCH_START)), 0
+    )
+    inv = InventoryTracker(t0)
+    for e in evs:
+        inv.prescan(e)
+    state: dict[str, PlayerInventory] = {}
+    for e in evs:
+        inv.feed(e, state)
+
+    wire_destroys = sum(1 for e in evs if reader.norm(e.get("_T", "")) == "logarmordestroy")
+    destroy_deltas = [d for d in inv.deltas if d.op == OP_ARMOR_DESTROY]
+    assert wire_destroys > 0
+    # Destroys of a piece we never saw equipped (pre-equip drift) may drop,
+    # but the bulk must survive; zero was the bug.
+    assert len(destroy_deltas) >= wire_destroys * 0.8
+    assert inv.suppressed_destroy_unequips > 0
+
+    hit_deltas = [d for d in inv.deltas if d.op == OP_ARMOR_HIT]
+    assert hit_deltas, "no protected hits in a whole match is implausible"
+    assert all(0 <= d.quantity <= 100 for d in hit_deltas)
+    assert all(d.slot in (SLOT_HELMET, SLOT_VEST) for d in hit_deltas)

@@ -46,8 +46,8 @@ uv sync --all-groups
 uv run pytest -q                          # full suite
 uv run pytest tests/test_telemetry_combat.py::test_zone_death_has_a_null_killer
 uv run pytest -q -rs                      # show why anything skipped
-uv run ruff check . --fix                 # clean; keep it that way
-uv run mypy pubg_dashboard                # NOT clean — 18 errors, see below
+uv run ruff check . --fix                 # clean; keep it that way (backend/ only)
+uv run mypy pubg_dashboard                # NOT clean, and never has been — see below
 
 uv run alembic upgrade head
 uv run alembic revision --autogenerate --rev-id 0003 -m "..."
@@ -96,16 +96,29 @@ This is not hypothetical: `.feed-row` was declared in both `Replay.css` and
 five-column match rows. A fresh load looked perfect — the collision only
 appeared after opening a replay and navigating back.
 
-`ruff` and both frontend checks pass. **`mypy` does not** — it is configured
-`strict = true` but the codebase has never satisfied it (currently 18 errors,
-mostly `type-arg`, `import-untyped` from boto3, and SQLAlchemy statement
-reassignment). Treat it as a source of hints, not a gate, and do not assume a
-red run means you broke something.
+`ruff` and the frontend checks pass. **`mypy` does not** — it is configured
+`strict = true` but the codebase has never satisfied it, mostly `type-arg`,
+`import-untyped` from boto3, and SQLAlchemy statement reassignment. Treat it as
+a source of hints, not a gate, and do not assume a red run means you broke
+something. No count is given here on purpose: it drifts, and a stale number
+reads as a regression budget it was never meant to be.
+
+**The ruff gate covers `backend/` only.** `scripts/` sits outside it and has
+long-standing failures of its own (RUF100, E501), so a red run there is
+probably not yours — check whether the file you touched is the one complaining
+before fixing anything.
 
 Operator CLI (`pubgd`): `seed`, `poll`, `worker`, `import-archive`, `stats`,
 `player`, `jobs`. Scripts: `scripts/panic_archive.py` (archive before the 14-day
 window closes, idempotent), `scripts/extract_schema.py` (regenerate the observed
 schema, ~3 min), `scripts/fetch_map_assets.py` (download + tile maps).
+
+`fetch_map_assets.py` asks the **running API** which maps have been played, not
+`data/matches/`, which is a raw-payload archive that lags the database. It
+lagged by 24 matches and two whole maps, so the default run reported success and
+built nothing for a Miramar match played that afternoon — no error, just a
+confident list of the wrong maps. When the API is unreachable it falls back to
+the archive scan and **says so**; a silent fallback would be the same bug again.
 
 ### Tests
 
@@ -121,6 +134,14 @@ When touching test infrastructure, run `-rs` and read the reasons.
 `db/session.py` caches the engine process-wide while `asyncio_mode = auto` gives
 each test its own loop, so any DB test module needs a per-test `dispose_engine`
 or the second test onward fails with "attached to a different loop".
+
+**A corpus test can go red with no code change.**
+`frontend/src/lib/format.corpus.test.ts` checks every damage causer in the live
+API against the kill feed's display tables, so the poller ingesting a match with
+an unseen vehicle or grenade fails it on a checkout nobody has touched. That is
+the test working: a BRDM roadkill arrived and reached the feed as the raw id
+`BP BRDM`, and the fix was one prefix in `VEHICLES` in `src/lib/format.ts`.
+Before assuming you caused a corpus-test failure, stash and re-run it.
 
 ## Architecture
 
@@ -263,6 +284,15 @@ Full list: BUILD-SPEC §6 (34 of them) and HANDOFF §5. The ones that bite most:
 - **`distance = -1` is a "not applicable" sentinel**, 8.6% of kills. Filter
   `> 0` in any "longest kill" query.
 - **`asset.attributes.URL` is uppercase.** It gates the entire replay feature.
+- **`LogArmorDestroy` carries `victim`, never `character`.** Reading
+  `character.accountId` silently drops every destroy (73 events, 0 deltas in a
+  measured match — hidden for the feature's whole life by a unit test whose
+  fixture invented a `character` field). The engine also emits a
+  `LogItemUnequip` for the destroyed piece 0–1 ms around the destroy, in
+  either same-millisecond order; unsuppressed it leaks the piece into the
+  loose inventory. And telemetry carries **no armor durability anywhere** —
+  the replay's armor bar is a corpus-fitted estimate (HANDOFF §12.4), never
+  read it as exact.
 - **`allWeaponStats` fields are `shots` and `hits`** (plus `dBNOHits`), not
   `shotsFired`/`hitCount`. Reading the wrong names produced `0` for all 5,978
   participants, and because the columns are NOT NULL, `count(shots_fired)`
@@ -329,11 +359,14 @@ a browser was actually loading the page. The latest: every player dot drew
 player 0's row. A hundred dots stacked on one player looks like a quiet map
 rather than a broken one — the tell was the alive counter reading 97 against a
 bundle that says 51. `frontend/scripts/probe-replay.mjs` prints page errors,
-failed requests and a DOM summary, and writes a screenshot. HANDOFF §17 has the
-no-root setup for a headless Chrome — note `/tmp` here is an **821 MB tmpfs**,
-so stage the browser on `/`, or the download wedges every shell on the box.
+failed requests and a DOM summary, and writes a screenshot. It takes a **match
+id, not a URL**: `node scripts/probe-replay.mjs <matchId> --t=600 --shot=x.png`,
+run from `frontend/` so node resolves `puppeteer`. HANDOFF §17 has the no-root
+setup for a headless Chrome — note `/tmp` here is an **821 MB tmpfs**, so stage
+the browser on `/`, or the download wedges every shell on the box.
 
-**There is no frontend test runner**
+It probes the deployed `dist/`, so **rebuild before probing** or you are testing
+the previous build and concluding things about code that is not running.
 
 ## Error messages must not name a cause they have not checked
 

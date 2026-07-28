@@ -64,7 +64,16 @@ BUNDLE_VERSION: Final = 1
 #:     `LogParachuteLanding` rather than the first position sample (which can
 #:     sit on the aircraft's path), and `landed_at_s` — a column that had
 #:     existed unwritten since 0002 — is finally populated.
-PARSER_VERSION: Final = 7
+#: 8 — armor condition. `OP_ARMOR_DESTROY` fired for the first time ever:
+#:     `LogArmorDestroy` carries `victim`, not `character`, so the old handler
+#:     read an empty account and dropped all 3,316 destroys in the corpus (its
+#:     unit test passed on a fixture invented with a `character` field). The
+#:     inv track gained `OP_ARMOR_HIT` — per protected hit, with an estimated
+#:     remaining-durability percent in `q` (telemetry carries no durability;
+#:     see `inventory` rules 11-12 for the fitted model and its two honest
+#:     error sources) — and the engine unequip that brackets each destroy is
+#:     now suppressed instead of leaking the destroyed piece into `loose`.
+PARSER_VERSION: Final = 8
 
 DEFAULT_TICK_MS: Final = 100
 FALLBACK_TICK_MS: Final = 1000
