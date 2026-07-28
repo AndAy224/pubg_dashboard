@@ -300,6 +300,16 @@ Full list: BUILD-SPEC §6 (34 of them) and HANDOFF §5. The ones that bite most:
   nothing** — use `count(*) FILTER (WHERE col > 0)`. Coverage is also tiny:
   PUBG reports it for ~2 accounts per match and a *tracked* player in 3 of 65,
   so `shots_fired == 0` means "not reported", never "fired nothing".
+- **`dBNOHits` is a *subset* of `hits`, not an addend.** The parser summed them
+  for its whole life, on the reading that `hits` meant standing targets and
+  `dBNOHits` knocked ones. Measured: `dBNOHits <= hits` on **547 of 547**
+  weapon rows, and per-weapon derived hits match `hits` alone at median 1.00
+  against 0.78 for the sum. It inflated **every accuracy figure the dashboard
+  showed by 31%** — corpus `shots 32,821 / hits 5,592 / dBNOHits 1,757`, so
+  17.0% displayed as 22.4%. Nothing caught it: `shots_hit` never exceeded
+  `shots_fired` (0 rows of 9,041), so it stayed a plausible percentage, and the
+  unit test guarding it was written from the same assumption as the code.
+  Fixed in parser v9.
 - **`LogWeaponFireCount.fireCount` is quantised to multiples of 10** and omits
   any weapon fired fewer than 10 times. It looks like an exact shot counter
   and is not — 99 real shots report as 120.

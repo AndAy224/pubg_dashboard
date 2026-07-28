@@ -12,6 +12,7 @@ import collections
 import itertools
 import json
 import pathlib
+from collections.abc import Mapping
 from typing import Any
 
 import pytest
@@ -502,9 +503,11 @@ def test_accuracy_comes_from_all_weapon_stats() -> None:
     participants — and because the columns were non-NULL zeros,
     `count(shots_fired)` reported them as fully populated.
 
-    `dBNOHits` is summed into hits: `hits` counts shots that connected with a
-    standing target, `dBNOHits` those that connected with a knocked one, and
-    accuracy wants both.
+    `dBNOHits` is **not** added to `hits` — it is a subset of it. This test
+    asserted the sum for as long as the parser computed it, which is the same
+    failure as the field names: a fixture written from the code's assumption
+    instead of the wire's shape. See the corpus tests below for the evidence
+    that overturned it.
     """
     ct = CombatTracker(t0_s=0.0)
     ct.feed(
@@ -523,7 +526,8 @@ def test_accuracy_comes_from_all_weapon_stats() -> None:
         }
     )
     assert ct.players["k"].shots_fired == 162
-    assert ct.players["k"].shots_hit == 13
+    # 8 + 3. NOT 13 — the two dBNOHits are already inside those hits.
+    assert ct.players["k"].shots_hit == 11
 
 
 def test_the_old_field_names_are_not_silently_accepted() -> None:
@@ -639,12 +643,92 @@ def test_corpus_all_weapon_stats_produce_real_shot_counts() -> None:
 
     assert total_shots > 0, "allWeaponStats parsed to zero shots across the corpus"
     # Hits cannot exceed shots, and an accuracy of 100% would mean the two
-    # fields have been crossed.
+    # fields have been crossed. Note how weak this bound is: the parser spent
+    # its whole life adding `dBNOHits` into `hits` — a 31% inflation — and sat
+    # comfortably inside it the entire time. The two tests below are the ones
+    # that pin the value rather than the plausibility.
     assert 0 < total_hits < total_shots
 
     # Measured: a median of 2 accounts per match, never more than 4. If PUBG
     # starts reporting everyone, this fires and the UI can stop apologising.
     assert max(covered) <= 8, f"coverage grew: {covered}"
+
+
+def _corpus_weapon_rows(limit: int) -> list[Mapping[str, Any]]:
+    """Every `allWeaponStats` weapon row in the corpus, straight off the wire."""
+    rows: list[Mapping[str, Any]] = []
+    for tele_path, _ in _corpus_pairs(limit):
+        for e in reader.load(tele_path.read_bytes()):
+            if reader.norm(e.get("_T", "")) != reader.norm(E.MATCH_END):
+                continue
+            for entry in e.get("allWeaponStats") or []:
+                rows.extend(w for w in (entry.get("stats") or []) if isinstance(w, Mapping))
+    return rows
+
+
+def test_corpus_dbno_hits_are_a_subset_of_hits() -> None:
+    """The wire fact the accuracy bug turned on.
+
+    `dBNOHits` counts the hits that landed on a knocked victim — hits that are
+    *already* in `hits`. Measured over every weapon row PUBG reports in the
+    archive: `dBNOHits <= hits` with **no exception**. If PUBG ever makes them
+    disjoint this fires, and the summing question has to be reopened
+    deliberately rather than by someone's intuition about what the names mean.
+    """
+    rows = _corpus_weapon_rows(65)
+    if not rows:
+        pytest.skip("no archived corpus; run scripts/panic_archive.py")
+
+    violations = [
+        (int(w.get("hits") or 0), int(w.get("dBNOHits") or 0))
+        for w in rows
+        if int(w.get("dBNOHits") or 0) > int(w.get("hits") or 0)
+    ]
+    assert not violations, f"dBNOHits exceeded hits on {len(violations)} rows: {violations[:5]}"
+    # Guard against a vacuous pass if the key is ever renamed away.
+    assert any(int(w.get("dBNOHits") or 0) > 0 for w in rows), "no dBNOHits observed at all"
+
+
+def test_corpus_hits_are_not_summed_with_dbno_hits() -> None:
+    """Two assertions, because one of them alone invites the bug back.
+
+    The parser must reproduce `sum(hits)` **and** must not reproduce
+    `sum(hits + dBNOHits)`. Only asserting the first lets someone "fix"
+    accuracy by restoring the sum and then relax the test to match; the second
+    makes the wrong answer explicit and failing.
+
+    Measured corpus totals at the time of the fix: shots 32,821, hits 5,592,
+    dBNOHits 1,757 — so the summed reading showed 22.4% accuracy where the
+    truth is 17.0%.
+    """
+    pairs = _corpus_pairs(65)
+    if not pairs:
+        pytest.skip("no archived corpus; run scripts/panic_archive.py")
+
+    parsed = 0
+    wire_hits = 0
+    wire_dbno = 0
+    for tele_path, _ in pairs:
+        evs = reader.load(tele_path.read_bytes())
+        ct = CombatTracker(0.0)
+        for e in evs:
+            ct.feed(e)
+        parsed += sum(p.shots_hit for p in ct.players.values())
+        for e in evs:
+            if reader.norm(e.get("_T", "")) != reader.norm(E.MATCH_END):
+                continue
+            for entry in e.get("allWeaponStats") or []:
+                for w in entry.get("stats") or []:
+                    if isinstance(w, Mapping):
+                        wire_hits += int(w.get("hits") or 0)
+                        wire_dbno += int(w.get("dBNOHits") or 0)
+
+    assert wire_dbno > 0, "no dBNOHits in the corpus; this test proves nothing"
+    assert parsed == wire_hits, f"parser {parsed} != wire hits {wire_hits}"
+    assert parsed != wire_hits + wire_dbno, (
+        "parser is summing dBNOHits into hits again — that inflates every "
+        f"accuracy figure by {wire_dbno / wire_hits:.0%}"
+    )
 
 
 def test_corpus_double_deaths_are_real_and_common() -> None:

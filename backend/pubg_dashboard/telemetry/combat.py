@@ -445,9 +445,22 @@ class CombatTracker:
         `dBNOHits`, `damage`, `dBNODamage`, `holdingTime`, `hitDetails` are
         the only keys ever present.
 
-        `hits` counts shots that connected with a standing target and
-        `dBNOHits` those that connected with a knocked one; accuracy wants
-        both, so they are summed.
+        **`dBNOHits` is a subset of `hits`, not an addend.** This code used to
+        sum the two, on the reading that `hits` counted shots landing on a
+        standing target and `dBNOHits` those landing on a knocked one. The
+        corpus says otherwise: `dBNOHits <= hits` on **547 of 547** weapon rows
+        with no exception, and a per-weapon check against derived hit events
+        matches `hits` alone (median ratio 1.00) while matching `hits +
+        dBNOHits` at 0.78. Worked example, `WeapBerreta686_C` in
+        `008a45cb…`: `shots 90, hits 44, dBNOHits 35`, against 44 attributed
+        damage events of which 35 had a DBNO victim.
+
+        Summing inflated every accuracy figure the dashboard showed by **31%**
+        — corpus totals `shots 32,821, hits 5,592, dBNOHits 1,757`, so 17.0%
+        was displayed as 22.4%. Nothing caught it because nothing could:
+        `shots_hit` never exceeded `shots_fired` (0 rows of 9,041), so the
+        number stayed a plausible percentage, and the unit test below was
+        written from the same assumption as the code. Fixed in parser v9.
 
         Re-deriving this from events is **not** an option, which is why the
         misnamed fields went unnoticed for so long:
@@ -477,9 +490,8 @@ class CombatTracker:
                 if not isinstance(weapon, Mapping):
                     continue
                 stats.shots_fired += int(weapon.get("shots") or 0)
-                stats.shots_hit += int(weapon.get("hits") or 0) + int(
-                    weapon.get("dBNOHits") or 0
-                )
+                # `hits` already includes `dBNOHits`. Do not add them.
+                stats.shots_hit += int(weapon.get("hits") or 0)
 
     # -- output -------------------------------------------------------------
     def longest_kill_cm(self, account: str) -> float:

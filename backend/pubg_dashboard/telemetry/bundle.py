@@ -73,7 +73,20 @@ BUNDLE_VERSION: Final = 1
 #:     see `inventory` rules 11-12 for the fitted model and its two honest
 #:     error sources) — and the engine unequip that brackets each destroy is
 #:     now suppressed instead of leaking the destroyed piece into `loose`.
-PARSER_VERSION: Final = 8
+#: 9 — `participants.shots_hit` stops double-counting. `_match_end` was adding
+#:     `allWeaponStats.dBNOHits` to `hits`, but `dBNOHits` is a **subset** of
+#:     `hits`, not an addend — `dBNOHits <= hits` on 547 of 547 weapon rows in
+#:     the corpus, and per-weapon derived hit events match `hits` alone at a
+#:     median ratio of 1.00 against 0.78 for the sum. Corpus totals: shots
+#:     32,821, hits 5,592, dBNOHits 1,757, so **every accuracy figure the
+#:     dashboard has ever shown was 31% too high** — 17.0% displayed as 22.4%.
+#:     Expect `shots_hit` to *fall* on the 250 participants PUBG reports stats
+#:     for; that is the fix, not a regression. Nothing caught it because
+#:     `shots_hit` never exceeded `shots_fired` (0 rows of 9,041), so the
+#:     number stayed a plausible percentage, and the unit test guarding it was
+#:     written from the same assumption as the code — the same shape as the
+#:     `shotsFired`/`hitCount` bug in v2 and the `LogArmorDestroy` bug in v8.
+PARSER_VERSION: Final = 9
 
 DEFAULT_TICK_MS: Final = 100
 FALLBACK_TICK_MS: Final = 1000

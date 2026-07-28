@@ -1313,3 +1313,76 @@ screenshot shows axes with no marks** — bars/lines animate in over ~1.5 s of
 requestAnimationFrame time that `--virtual-time-budget` does not reliably
 deliver. The DOM had correct geometry and computed styles all along; wait
 ~4 s of real time before screenshotting chart pages.
+
+---
+
+## 25. Accuracy was 31% too high, for the whole life of the feature — fixed 2026-07-28
+
+Found while evaluating the app for what to build next, not by anyone noticing a
+wrong number. `combat.py::_match_end` did:
+
+```python
+stats.shots_hit += int(weapon.get("hits") or 0) + int(weapon.get("dBNOHits") or 0)
+```
+
+on the reading that `hits` counts shots landing on a standing target and
+`dBNOHits` those landing on a knocked one, so accuracy wants both. The corpus
+disagrees, unambiguously:
+
+* **`dBNOHits <= hits` on 547 of 547 weapon rows**, no exceptions.
+* Per-weapon, derived hit events match `hits` alone at a median ratio of
+  **1.00**, and `hits + dBNOHits` at **0.78**.
+* Worked example, `WeapBerreta686_C` in `008a45cb…`: `shots 90, hits 44,
+  dBNOHits 35` — against 44 attributed damage events, of which 35 had a DBNO
+  victim. The 35 are inside the 44.
+
+Corpus totals `shots 32,821 / hits 5,592 / dBNOHits 1,757`, so **17.0% accuracy
+was displayed as 22.4%** — a 31% relative inflation on every accuracy figure the
+dashboard has ever shown, everywhere it appears.
+
+### Why nothing caught it
+
+The two obvious guards both passed:
+
+* `shots_hit` never exceeded `shots_fired` — **0 rows of 9,041** — so the figure
+  stayed a plausible-looking percentage and no invariant fired. The existing
+  corpus test asserted exactly `0 < total_hits < total_shots`, which the
+  inflated value satisfies comfortably.
+* The unit test asserted `shots_hit == 13` on a fixture with `hits 8+3` and
+  `dBNOHits 0+2`. **It was written from the code's assumption**, so it pinned
+  the bug rather than the wire — the third time that exact shape has appeared
+  here, after `shotsFired`/`hitCount` (§12.3) and `LogArmorDestroy` (§12.4).
+
+### What was added
+
+Two corpus tests, and both were verified to **fail when the bug is restored**
+(2 failed, 36 passed; the corpus one reports `parser 7349 != wire hits 5592`):
+
+* `test_corpus_dbno_hits_are_a_subset_of_hits` — the wire fact itself, plus a
+  guard against a vacuous pass if PUBG ever renames the key away.
+* `test_corpus_hits_are_not_summed_with_dbno_hits` — asserts the parser
+  reproduces `sum(hits)` **and** does *not* reproduce `sum(hits + dBNOHits)`.
+  Two assertions on purpose: with only the first, someone "fixes" accuracy by
+  restoring the sum and then relaxes the test to match.
+
+### Reparse
+
+Parser **v9**; `POST /api/ingest/reparse?staleOnly=true`, 97 matches, ~7 min,
+0 failures. Verified after:
+
+| | before | after |
+|---|---:|---:|
+| `sum(shots_fired)` | 47,111 | 47,111 |
+| `sum(shots_hit)` | 10,497 | **7,996** |
+| accuracy | 22.3% | **17.0%** |
+| `heatmap_bins` total | 2,214,264 | **2,214,264** |
+| `kill_events` | 9,275 | 9,275 |
+| matches at head version | 97 @ v8 | 97 @ v9 |
+
+The unchanged heatmap total is the ledger doing its job — that is the number to
+check on every reparse, because a doubled heatmap is invisible by inspection.
+Replay bundles re-uploaded under the v9 key and serve at 132,819 B;
+`npm test`'s corpus decoder reads them (94 passed).
+
+**Expect `shots_hit` to fall** on the 250 participants PUBG reports stats for.
+That is the fix, not a regression.
