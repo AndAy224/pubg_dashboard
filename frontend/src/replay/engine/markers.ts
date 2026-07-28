@@ -115,8 +115,9 @@ export interface CrateMarker {
   y: number
   /** True between the spawn tick and the landing tick — it is still in the air. */
   falling: boolean
-  /** Dictionary index of the package id, or -1 on a pre-v12 bundle. */
-  pkg: number
+  /** The red box — the one worth crossing open ground for. 500 of the corpus
+   *  landings. False on a pre-v12 bundle, where rarity was not carried. */
+  rare: boolean
 }
 
 export interface KillMarker {
@@ -176,7 +177,7 @@ export function markersAt(
         x: e.x as number,
         y: e.y as number,
         falling: tick < land,
-        pkg: typeof e.pkg === 'number' ? e.pkg : -1,
+        rare: e.rare === true,
       })
     } else if (e.k === 'leave') {
       const age = 1 - (tick - e.t) / vehicleWindowTicks

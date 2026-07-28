@@ -130,12 +130,24 @@ export interface ReplayBundle {
     wx: Uint16Array
     wy: Uint16Array
     wr: Uint16Array
-    rx: Uint16Array
-    ry: Uint16Array
-    rr: Uint16Array
     alive: Uint8Array
     teams: Uint8Array
   }
+  /**
+   * Red-zone bombardments — seven per match, as discrete objects.
+   *
+   * **Red zones were documented as gone from Erangel**, because
+   * `LogGameStatePeriodic.redZone*` is 0 in every archived match. Those fields
+   * are dead; the feature lives in `LogSpecialZoneInCharacters`, and 19 of 20
+   * corpus matches carry a full lifecycle for each zone. The old
+   * permanently-zero `zones.rx/ry/rr` arrays were removed in parser v12 rather
+   * than backfilled: resampling a 45 s warning and a 30 s bombardment into one
+   * per-sample radius loses the distinction that changes how people play.
+   *
+   * `t` is the warning, `t0` the first bomb, `t1` the last. All in ticks.
+   * Empty on a pre-v12 bundle.
+   */
+  redZones: { t: number; t0: number; t1: number; x: number; y: number; r: number }[]
   plane: { x0: number; y0: number; x1: number; y1: number } | null
   inv: {
     kfEveryMs: number
@@ -237,10 +249,12 @@ export function decodeBundle(raw: ArrayBuffer): ReplayBundle {
       t: u16(zones.t),
       bx: u16(zones.bx), by: u16(zones.by), br: u16(zones.br),
       wx: u16(zones.wx), wy: u16(zones.wy), wr: u16(zones.wr),
-      rx: u16(zones.rx), ry: u16(zones.ry), rr: u16(zones.rr),
       alive: u8(zones.alive),
       teams: u8(zones.teams),
     },
+    // Absent on a pre-v12 bundle, and an empty list is also the correct answer
+    // for a map with no red zones. Both read as "nothing to draw".
+    redZones: (d.redZones as ReplayBundle['redZones'] | undefined) ?? [],
     inv: {
       kfEveryMs: inv.kfEveryMs,
       n: inv.n,

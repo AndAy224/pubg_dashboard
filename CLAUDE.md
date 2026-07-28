@@ -271,6 +271,25 @@ Full list: BUILD-SPEC §6 (34 of them) and HANDOFF §5. The ones that bite most:
 - **Zone field names are inverted.** `safetyZone*` is the **blue** damaging
   circle (interpolate); `poisonGasWarning*` is the **white** next circle
   (**snap** — it is a step function).
+- **Red zones exist; `redZone*` is the wrong field.** `LogGameStatePeriodic`'s
+  `redZone*`/`blackZone*` are 0 in every archived match, and this repo
+  concluded from that in four separate documents that red zones had been
+  removed and the renderer should not be built. They had not been:
+  `LogSpecialZoneInCharacters` carries `zoneType: "RedZone"` with a full
+  lifecycle (Warning → Activating at +45 s → ActivationDone at ~1 Hz →
+  Deactivating ~30 s later), a fixed position, a 395–500 m radius and the
+  roster of everyone inside — **seven per match, in 19 of 20 measured**. Parsed
+  since v12; `zones.rx/ry/rr` were deleted rather than backfilled, because one
+  per-sample radius cannot say "warned" versus "being bombed".
+  `character.isInRedZone` is set from the **warning**, not from the first bomb.
+  Red-zone *damage* is negligible (3 events, 1 kill across 15 matches) — this
+  is map fidelity, not a statistic.
+- **A care-package id can be a vehicle.** The flare-gun delivery guard was the
+  single literal `"uaz_armored_c"`, which occurs **nowhere** in the corpus, so
+  19 vehicle drops rendered as loot crates. What arrives is
+  `Carapackage_FlareGun_C` and `BP_BRDM_C` — and PUBG spells it `Carapackage`
+  in three package ids and `Carepackage` in a fourth, so match a lowercased
+  **substring**, never equality.
 - **`common.isGame == 0.1` is never true**; the wire value is
   `0.10000000149011612`. Compare with tolerance. Gates plane-phase detection
   and the movement heatmap.

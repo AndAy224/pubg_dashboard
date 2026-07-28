@@ -27,11 +27,108 @@ from typing import Any, Final
 from pubg_dashboard.telemetry import events as E
 from pubg_dashboard.telemetry.reader import norm, ts
 
-__all__ = ["CarePackage", "PlanePath", "VehicleRide", "WorldTracker", "ZoneSample"]
+__all__ = [
+    "CarePackage",
+    "PhaseChange",
+    "PlanePath",
+    "RedZone",
+    "VehicleRide",
+    "WorldTracker",
+    "ZoneSample",
+    "is_crate_rare",
+    "is_flare_vehicle",
+]
 
-#: A flare-gun vehicle delivery, not a loot crate. It arrives through the same
-#: care-package events and would otherwise show up as a crate that contains a car.
-FLARE_VEHICLE_PACKAGE: Final = "uaz_armored_c"
+#: Flare-gun **vehicle** deliveries, not loot crates. They arrive through the
+#: same care-package events and would otherwise show up as crates containing a
+#: car.
+#:
+#: This used to be the single literal `"uaz_armored_c"`, which **does not occur
+#: anywhere in the corpus** — so the guard caught nothing and 19 vehicle drops
+#: were rendered as loot. What actually arrives, counted over the archive:
+#:
+#:     Carepackage_SmallPackage_NoParachute_Bluechip_C   512
+#:     Carapackage_RedBox_C                              500
+#:     Carapackage_SmallPackage_NoParachute_C            240
+#:     Carapackage_FlareGun_C                             22
+#:     BP_BRDM_C                                          16
+#:
+#: Matched as lowercased **substrings**, never by equality: PUBG spells it
+#: `Carapackage` in three of those ids and `Carepackage` in the fourth, and an
+#: exact-match list is exactly how the previous version failed silently.
+FLARE_VEHICLE_MARKERS: Final = ("uaz_armored", "bp_brdm", "flaregun")
+
+#: Crate rarity, for the replay marker. Substring again, same reason.
+CRATE_RARE_MARKER: Final = "redbox"
+
+_RED_ZONE_TYPE: Final = "redzone"
+_ZONE_WARNING: Final = "warning"
+_ZONE_ACTIVATING: Final = "activating"
+_ZONE_DEACTIVATING: Final = "deactivating"
+
+
+def is_flare_vehicle(package_id: str) -> bool:
+    """Is this "care package" actually a flare-gun vehicle delivery?"""
+    low = norm(package_id)
+    return any(marker in low for marker in FLARE_VEHICLE_MARKERS)
+
+
+def is_crate_rare(package_id: str) -> bool:
+    """The red box — the one worth crossing open ground for."""
+    return CRATE_RARE_MARKER in norm(package_id)
+
+
+@dataclass(slots=True)
+class RedZone:
+    """One red-zone bombardment: a discrete object, not a per-sample circle.
+
+    **Red zones are not gone.** `LogGameStatePeriodic.redZoneRadius` is 0 in
+    every archived match, and this repo concluded from that they had been
+    removed from Erangel and that the renderer should not be built. The fields
+    are indeed dead; the feature moved to `LogSpecialZoneInCharacters`.
+
+    Measured over the corpus: **19 of 20 matches** carry them, 4,389 events,
+    `zoneState` in Warning / Activating / ActivationDone / Deactivating —
+    exactly **seven zones per match**, each with a stable `uniqueId` 0..6, a
+    position and radius that do not move for the zone's whole life (39,500 to
+    50,000 cm, i.e. 395-500 m), and the list of characters caught inside.
+
+    Timing, from one match: Warning, then Activating at **+45 s**, then
+    `ActivationDone` repeating at ~1 Hz, then Deactivating **~30 s** later.
+    That is the shape a renderer needs and the reason this is not resampled
+    into the zone track: the 45 s warning and the 30 s bombardment are
+    different states and a single radius array cannot say which is which.
+
+    `unique_id` is **match-scoped** — 0..6 in every match — so it must never
+    reach SQL as an identity. It exists to group events within one parse.
+    """
+
+    unique_id: int
+    x: float
+    y: float
+    radius: float
+    #: Warning issued; the circle is drawn but nothing is falling yet.
+    warn_t_s: float
+    #: Bombardment starts. None only if the match ended during the warning.
+    start_t_s: float | None = None
+    #: Bombardment ends. Clamped to the match end by `finalise`, never left
+    #: None — an open-ended red zone renders as a bombardment that never stops.
+    end_t_s: float | None = None
+
+
+@dataclass(slots=True)
+class PhaseChange:
+    """A blue-zone phase step, and who was inside the white circle for it.
+
+    `playersInWhiteCircle` is exact ground truth for the question
+    `strategy_metrics.rotate_lag_s` currently answers with a heuristic. Note
+    each phase **number appears twice** per match, so "were we in the circle at
+    phase N" must take the later event: the first reports the whole lobby.
+    """
+
+    t_s: float
+    phase: int
+    in_circle: list[str] = field(default_factory=list)
 
 #: Spawn and land events share no id — `itemPackageId` is a class name, not an
 #: instance. They are paired by nearest **XY** distance; z differs by ~30 km
@@ -93,6 +190,7 @@ class WorldTracker:
     """Zones, care packages, vehicles and the flight path for one match."""
 
     __slots__ = (
+        "_open_red",
         "_plane_points",
         "_rides",
         "_spawns",
@@ -100,6 +198,7 @@ class WorldTracker:
         "_world_size",
         "landed",
         "phases",
+        "red_zones",
         "rides",
         "zones",
     )
@@ -108,7 +207,12 @@ class WorldTracker:
         self._t0_s = t0_s
         self._world_size = world_size
         self.zones: list[ZoneSample] = []
-        self.phases: list[tuple[float, int]] = []
+        self.phases: list[PhaseChange] = []
+        self.red_zones: list[RedZone] = []
+        # uniqueId -> the zone currently being built. Keyed rather than kept as
+        # a single "current", because the Warning of zone N+1 arrives in the
+        # same second as the Deactivating of zone N.
+        self._open_red: dict[int, RedZone] = {}
         self._spawns: list[tuple[float, float, float, str]] = []
         self.landed: list[CarePackage] = []
         self._rides: dict[tuple[str, str], VehicleRide] = {}
@@ -124,7 +228,17 @@ class WorldTracker:
         if kind == norm(E.GAME_STATE_PERIODIC):
             self._game_state(event)
         elif kind == norm(E.PHASE_CHANGE):
-            self.phases.append((self._rel(event), int(event.get("phase") or 0)))
+            self.phases.append(
+                PhaseChange(
+                    t_s=self._rel(event),
+                    phase=int(event.get("phase") or 0),
+                    in_circle=[
+                        str(a) for a in (event.get("playersInWhiteCircle") or []) if a
+                    ],
+                )
+            )
+        elif kind == norm(E.SPECIAL_ZONE_IN_CHARACTERS):
+            self._special_zone(event)
         elif kind == norm(E.CARE_PACKAGE_SPAWN):
             self._package_spawn(event)
         elif kind == norm(E.CARE_PACKAGE_LAND):
@@ -154,9 +268,11 @@ class WorldTracker:
                 white_r=float(gs.get("poisonGasWarningRadius") or 0.0),
                 red_x=float(red.get("x") or 0.0),
                 red_y=float(red.get("y") or 0.0),
-                # 0 in every archived match — red zones are gone from Erangel.
-                # The track is emitted anyway (one line) but the renderer must
-                # guard `r > 0` rather than assume it exists.
+                # 0 in every archived match — but **red zones are not gone**,
+                # these fields are simply dead. The feature lives in
+                # `LogSpecialZoneInCharacters`; see `RedZone`. Kept here only
+                # so the game-state shape stays a faithful mirror of the wire.
+                # Nothing reads them, and they are no longer in the bundle.
                 red_r=float(gs.get("redZoneRadius") or 0.0),
                 alive_players=int(gs.get("numAlivePlayers") or 0),
                 alive_teams=int(gs.get("numAliveTeams") or 0),
@@ -166,7 +282,7 @@ class WorldTracker:
     def _package_spawn(self, event: Mapping[str, Any]) -> None:
         package = event.get("itemPackage") or {}
         package_id = str(package.get("itemPackageId") or "")
-        if norm(package_id) == FLARE_VEHICLE_PACKAGE:
+        if is_flare_vehicle(package_id):
             return
         x, y, _ = E.location(package)
         self._spawns.append((self._rel(event), x, y, package_id))
@@ -174,7 +290,7 @@ class WorldTracker:
     def _package_land(self, event: Mapping[str, Any]) -> None:
         package = event.get("itemPackage") or {}
         package_id = str(package.get("itemPackageId") or "")
-        if norm(package_id) == FLARE_VEHICLE_PACKAGE:
+        if is_flare_vehicle(package_id):
             return
         x, y, _ = E.location(package)
         items = [
@@ -192,6 +308,61 @@ class WorldTracker:
                 items=items,
             )
         )
+
+    def _special_zone(self, event: Mapping[str, Any]) -> None:
+        """Build red-zone lifecycles from `LogSpecialZoneInCharacters`.
+
+        Dispatch is on the **lowercased** zone type and state, with no
+        exhaustive branch: every PUBG enum is open and casing has moved between
+        patches for all of them. An unrecognised zone type is ignored rather
+        than assumed to be a red zone.
+        """
+        info = event.get("zoneInfo") or {}
+        if norm(str(info.get("zoneType") or "")) != _RED_ZONE_TYPE:
+            return
+        state = norm(str(info.get("zoneState") or ""))
+        unique_id = int(info.get("uniqueId") or 0)
+        t = self._rel(event)
+
+        if state == _ZONE_WARNING:
+            position = info.get("position") or {}
+            self._open_red[unique_id] = RedZone(
+                unique_id=unique_id,
+                x=float(position.get("x") or 0.0),
+                y=float(position.get("y") or 0.0),
+                # Position and radius do not move for the zone's whole life,
+                # so they are taken once at the warning rather than tracked.
+                radius=float(info.get("horizontalRadius") or 0.0),
+                warn_t_s=t,
+            )
+            return
+
+        zone = self._open_red.get(unique_id)
+        if zone is None:
+            # A zone whose Warning was never seen — a truncated stream, or a
+            # match joined late. Better to drop it than to invent a start.
+            return
+        if state == _ZONE_ACTIVATING and zone.start_t_s is None:
+            zone.start_t_s = t
+        elif state == _ZONE_DEACTIVATING:
+            zone.end_t_s = t
+            self.red_zones.append(zone)
+            del self._open_red[unique_id]
+
+    def finalise_red_zones(self, duration_s: float) -> None:
+        """Close any zone still open when the stream ended.
+
+        A match that ends mid-bombardment leaves `end_t_s` unset, and an
+        open-ended red zone renders as a bombardment that never stops — which
+        looks like a long fight rather than like missing data.
+        """
+        for zone in self._open_red.values():
+            zone.end_t_s = duration_s
+            if zone.start_t_s is None:
+                zone.start_t_s = min(zone.warn_t_s, duration_s)
+            self.red_zones.append(zone)
+        self._open_red.clear()
+        self.red_zones.sort(key=lambda z: z.warn_t_s)
 
     def _match_spawn(self, x: float, y: float) -> float | None:
         """Nearest unclaimed spawn by XY distance, or None.

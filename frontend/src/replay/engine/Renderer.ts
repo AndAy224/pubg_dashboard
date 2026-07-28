@@ -199,7 +199,16 @@ export class Renderer {
    * proves nothing about the code**, so the drawing is confirmed from live
    * state first and the picture second.
    */
-  readonly drawn = { kills: 0, crates: 0, vehicles: 0, trails: 0, tracers: 0, plane: false }
+  readonly drawn = {
+    kills: 0,
+    crates: 0,
+    rareCrates: 0,
+    vehicles: 0,
+    trails: 0,
+    tracers: 0,
+    redZones: 0,
+    plane: false,
+  }
 
   /** Playhead, in milliseconds since t0. A ref, never React state. */
   nowMs = 0
@@ -651,6 +660,7 @@ export class Renderer {
     if (this.viewport.isFollowing !== null) this.viewport.centreOn(followX, followY)
 
     this.drawZones(tick)
+    this.drawRedZones(tick)
     this.drawTrails(tick)
     this.drawMarkers(tick)
     this.drawTracers(tick)
@@ -791,14 +801,44 @@ export class Renderer {
       })
     }
 
-    // Red zone is 0 across every archived match, so it is guarded rather than
-    // assumed — the track exists, the circles do not.
-    const rr = this.toWorld(z.rr[i]!)
-    if (rr > 0) {
-      g.circle(this.toWorld(z.rx[i]!), this.toWorld(z.ry[i]!), rr).fill({
-        color: 0xff4444,
-        alpha: 0.18,
-      })
+    // Red zones are drawn from their own track, not from the zone samples —
+    // see `drawRedZones`. The permanently-zero `zones.rx/ry/rr` arrays this
+    // used to read were removed in parser v12.
+  }
+
+  /**
+   * Red-zone bombardments: a dashed warning ring, then a filled blast area.
+   *
+   * **Two states, because the data has two**, and they are what changes
+   * behaviour: the warning runs ~45 s and means "get indoors", the
+   * bombardment ~30 s and means "stay there". A single circle would say
+   * neither.
+   *
+   * This repo recorded in four separate documents that red zones no longer
+   * existed on Erangel, because `LogGameStatePeriodic.redZone*` is 0 in every
+   * archived match. Those fields are dead; the feature moved to
+   * `LogSpecialZoneInCharacters`, which 19 of 20 corpus matches carry.
+   */
+  private drawRedZones(tick: number): void {
+    const g = this.zoneLayer
+    const inv = 1 / this.viewport.scale
+    this.drawn.redZones = 0
+
+    for (const z of this.opts.bundle.redZones) {
+      if (tick < z.t || tick > z.t1) continue
+      const x = this.toWorld(z.x)
+      const y = this.toWorld(z.y)
+      const r = this.toWorld(z.r)
+      this.drawn.redZones++
+
+      if (tick < z.t0) {
+        // Warning. Outline only — nothing is falling yet, and a filled circle
+        // would claim otherwise.
+        g.circle(x, y, r).stroke({ width: 2 * inv, color: 0xff4444, alpha: 0.6 })
+      } else {
+        g.circle(x, y, r).fill({ color: 0xff4444, alpha: 0.16 })
+        g.circle(x, y, r).stroke({ width: 1.5 * inv, color: 0xff6b6b, alpha: 0.75 })
+      }
     }
   }
 
@@ -824,6 +864,7 @@ export class Renderer {
     const m = markersAt(b.events, tick, VEHICLE_MS / b.tickMs)
     this.drawn.kills = m.kills.length
     this.drawn.crates = m.crates.length
+    this.drawn.rareCrates = 0
     this.drawn.vehicles = m.vehicles.length
     this.drawn.plane = b.plane !== null
 
@@ -846,12 +887,16 @@ export class Renderer {
     for (const c of m.crates) {
       const x = this.toWorld(c.x)
       const y = this.toWorld(c.y)
-      const r = markerRadius(CRATE_R, this.viewport.scale)
+      // The red box is bigger as well as redder: it is the one people cross
+      // open ground for, so it should be findable at fit zoom.
+      const r = markerRadius(c.rare ? CRATE_R * 1.5 : CRATE_R, this.viewport.scale)
+      const colour = c.rare ? 0xff4d4d : 0xf0b429
+      if (c.rare) this.drawn.rareCrates++
       g.rect(x - r, y - r, r * 2, r * 2)
       if (c.falling) {
-        g.stroke({ width: 1.2 * inv, color: 0xf0b429, alpha: 0.55 })
+        g.stroke({ width: 1.2 * inv, color: colour, alpha: 0.55 })
       } else {
-        g.fill({ color: 0xf0b429, alpha: 0.8 })
+        g.fill({ color: colour, alpha: 0.8 })
       }
     }
 

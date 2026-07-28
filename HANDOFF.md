@@ -176,7 +176,10 @@ Do not "fix" these back to something that looks more sensible.
     **white/next** circle. Interpolate blue; **snap** white (it's a step
     function). Getting this backwards looks almost right and is entirely wrong.
 15. `redZone*` and `blackZone*` are **always 0** across all 9,150 game-state
-    events — red zones are gone from current Erangel. Don't build that renderer.
+    events. ~~Red zones are gone from current Erangel. Don't build that
+    renderer.~~ **That conclusion was wrong** — see §26. The *fields* are dead;
+    the feature moved to `LogSpecialZoneInCharacters`, where 19 of 20 matches
+    carry seven complete lifecycles. The renderer shipped in parser v12.
 16. `LogItemDrop` does **not** fire on death. The victim emits a
     `LogItemDetach` burst at +0–1 s and a `LogItemUnequip` burst at **exactly
     +60 s** (n=563). Applied naively, every dead player's gear evaporates a
@@ -1386,3 +1389,82 @@ Replay bundles re-uploaded under the v9 key and serve at 132,819 B;
 
 **Expect `shots_hit` to fall** on the 250 participants PUBG reports stats for.
 That is the fix, not a regression.
+
+---
+
+## 26. Red zones were never gone — corrected 2026-07-28
+
+§5.15 said: "`redZone*` and `blackZone*` are **always 0** across all 9,150
+game-state events — red zones are gone from current Erangel. Don't build that
+renderer." BUILD-SPEC §3.9, CLAUDE.md and a comment in `world.py` said the same
+thing. **All four were wrong, and they were wrong in the same way**: a true
+statement about `LogGameStatePeriodic.redZone*` was generalised into a false
+statement about the game.
+
+The feature lives in `LogSpecialZoneInCharacters`. Measured over 20 archived
+matches:
+
+* **19 of 20** carry red zones; 4,389 events
+* `zoneInfo.zoneType == "RedZone"` is the only zone type that ever appears
+* `zoneState` runs Warning (133) → Activating (133) → ActivationDone (3,990,
+  at ~1 Hz) → Deactivating (133) — exactly **seven zones per match**
+* each has a stable `uniqueId` 0–6, a position and radius that **do not move**
+  for the zone's whole life (39,500–50,000 cm, i.e. 395–500 m), and
+  `charactersInZone[]`, the roster of everyone inside
+* timing, from one match: Warning, Activating at **+45 s**, Deactivating
+  **~30 s** after that
+
+Parser **v12** emits a discrete `redZones` bundle section — seven small maps,
+~200 bytes gzipped. The renderer draws two states, because the data has two and
+they mean different things: a dashed outline for the 45 s warning ("get
+indoors") and a filled disc for the 30 s bombardment ("stay there").
+
+### The zero arrays were deleted, not backfilled
+
+`zones.rx/ry/rr` are gone from the bundle. Backfilling the discrete track into
+them would resample a 45 s warning and a 30 s bombardment into a single
+per-sample radius at the game-state cadence, losing the one distinction that
+changes how anyone plays. Deleting them is also what makes that mistake
+impossible to make later. The decoder no longer reads them, and the corpus test
+asserts they are absent — a removal nobody asserts is a removal that comes back.
+
+### The check that proves the circles are in the right place
+
+`charactersInZone` and `character.isInRedZone` come from **two independent
+event streams**, so their agreeing is real evidence. A red circle drawn at the
+wrong coordinates still looks exactly like a red circle; nothing else that could
+be written here would catch it.
+
+Writing that test produced a fact worth keeping: **`isInRedZone` is set from the
+warning, not from the first bomb.** A sample at t=633 s sat 29,157 cm inside a
+zone of radius 43,550 that was warned at 631.3 s and did not start bombing until
+676.3 s. A test window keyed on the bombardment start fails — correctly.
+
+### Honest limit
+
+Red-zone **damage is negligible**: `RedZoneBombingField_Def_C` appears in 3
+damage events and 1 kill across 15 matches. This is map fidelity and a corrected
+document. It is not a new statistic, and no stat page was built on it.
+
+### Two more things fixed in the same pass
+
+* **The flare-vehicle filter matched nothing.** `FLARE_VEHICLE_PACKAGE` was the
+  literal `"uaz_armored_c"`, which does not occur anywhere in the corpus, so 19
+  flare-gun vehicle deliveries were classified as loot crates for the whole life
+  of the feature. What actually arrives is `Carapackage_FlareGun_C` (22) and
+  `BP_BRDM_C` (16). Note PUBG spells it **`Carapackage`** in three package ids
+  and **`Carepackage`** in a fourth — which is precisely why the replacement
+  matches a lowercased substring rather than comparing ids.
+* **Crate rarity reaches the bundle.** 500 of the corpus landings are
+  `Carapackage_RedBox_C` and nothing downstream could tell one from a small
+  drop. The replay now draws the red box larger and in red.
+
+`LogPhaseChange.playersInWhiteCircle` is also carried now — exact ground truth
+for the question `strategy_metrics.rotate_lag_s` answers with a heuristic. Two
+properties, both measured: each phase **number appears twice** per match (so
+"were we in the circle at phase N" must take the later event, or the first
+reports most of the lobby), and the roster **does not shrink monotonically** —
+one match runs 17, 15, 8, 8, 9, 5, because the circle keeps getting smaller
+while players keep rotating into it.
+
+Cost: average bundle 134,508 → **134,794 bytes**, +0.2%.

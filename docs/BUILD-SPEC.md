@@ -659,8 +659,17 @@ Clamp `x`/`y` into `[0, worldSize)` before quantising — telemetry legitimately
   renderers and by the corpus (`safetyZoneRadius` is high-cardinality/continuous;
   `poisonGasWarningRadius` takes 7 discrete values — exactly what a step function looks like).
 - Blue circle → **interpolate** between samples. White circle → **snap**, never interpolate.
-- `redZoneRadius` and `blackZoneRadius` are **0 in all 61 archived matches**. Emit the tracks anyway
-  (one line of code) but guard `radius > 0` before drawing and do not block on them.
+- `redZoneRadius` and `blackZoneRadius` are **0 in all archived matches — but red
+  zones still exist.** This spec previously concluded from those zeroes that the
+  feature had been removed and the renderer should not be built. It had not: it
+  moved to `LogSpecialZoneInCharacters`, which carries `zoneType: "RedZone"`, a
+  `zoneState` lifecycle (Warning -> Activating -> ActivationDone -> Deactivating),
+  a fixed position and radius, and the roster of everyone inside. Seven per match,
+  in 19 of 20 measured. Parsed into a discrete `redZones` bundle section as of
+  parser v12; the permanently-zero `zones.rx/ry/rr` arrays were deleted with it,
+  because resampling a 45 s warning and a 30 s bombardment into one per-sample
+  radius loses the distinction that matters. Red-zone *damage* is negligible
+  (3 events, 1 kill across 15 matches), so this is fidelity, not a statistic.
 - `LogRedZoneEnded` is the only red-zone lifecycle event; there is no start event. Derive activation
   from `redZoneRadius > 0`.
 - **Care packages:** `LogCarePackageSpawn` → `LogCarePackageLand` have **no shared id**

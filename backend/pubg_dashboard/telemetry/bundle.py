@@ -115,7 +115,33 @@ BUNDLE_VERSION: Final = 1
 #:      from PUBG's own `damage_dealt` because the two will differ),
 #:      `blue_zone_damage`, `longest_kill_cm` (already free of the -1
 #:      sentinel) and `revives_telemetry`.
-PARSER_VERSION: Final = 11
+#: 12 — **red zones are not gone.** This repo recorded, in four documents, that
+#:      they had been removed from Erangel because `LogGameStatePeriodic`'s
+#:      `redZone*` fields are 0 in every archived match. The fields are dead;
+#:      the feature moved to `LogSpecialZoneInCharacters`, where **19 of 20
+#:      matches** carry seven full lifecycles each — Warning, Activating at
+#:      +45 s, ActivationDone at ~1 Hz, Deactivating ~30 s later — with a fixed
+#:      position, a radius of 395-500 m, and the roster of everyone caught
+#:      inside. New `redZones` bundle section, ~200 bytes.
+#:
+#:      The permanently-zero `zones.rx/ry/rr` arrays are **deleted** rather
+#:      than backfilled from it. They are per-sample circles at the game-state
+#:      cadence, and resampling a 45 s warning plus a 30 s bombardment into one
+#:      radius loses the only distinction that changes behaviour.
+#:
+#:      Honest limit: red-zone *damage* is negligible — 3 damage events and 1
+#:      kill across 15 matches. This is map fidelity and a corrected document,
+#:      not a new statistic.
+#:
+#:      Also: `world.FLARE_VEHICLE_PACKAGE` was the literal `"uaz_armored_c"`,
+#:      which occurs **nowhere in the corpus**, so the guard against rendering
+#:      flare-gun vehicle deliveries as loot crates caught nothing and 19 of
+#:      them showed up as crates. Matched on lowercased substrings now, because
+#:      PUBG spells it `Carapackage` in three ids and `Carepackage` in a
+#:      fourth. Crates carry `rare` (the red box, 500 of the corpus landings)
+#:      and phase events carry `inCircle`, the exact white-circle roster that
+#:      `strategy_metrics.rotate_lag_s` approximates with a heuristic.
+PARSER_VERSION: Final = 12
 
 DEFAULT_TICK_MS: Final = 100
 FALLBACK_TICK_MS: Final = 1000
@@ -141,6 +167,7 @@ class ReplayBundle:
     pos: FrameArrays
     events: list[dict[str, Any]]
     zones: dict[str, Any]
+    red_zones: list[dict[str, Any]]
     plane: dict[str, float] | None
     inv: dict[str, Any]
     #: Attributed hits, for the replay's combat tracers.
@@ -229,6 +256,7 @@ def to_dict(bundle: ReplayBundle) -> dict[str, Any]:
         },
         "events": bundle.events,
         "zones": bundle.zones,
+        "redZones": bundle.red_zones,
         "plane": bundle.plane,
         "inv": bundle.inv,
         "hits": bundle.hits,

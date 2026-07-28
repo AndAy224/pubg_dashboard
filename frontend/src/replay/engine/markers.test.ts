@@ -133,7 +133,7 @@ describe('trailPoints', () => {
 describe('markersAt', () => {
   const events: BundleEvent[] = [
     { t: 10, k: 'kill', v: 1, vx: 100, vy: 200 },
-    { t: 20, k: 'cp', x: 300, y: 400, land: 50 },
+    { t: 20, k: 'cp', x: 300, y: 400, land: 50, rare: true },
     { t: 30, k: 'leave', p: 2, x: 500, y: 600 },
     { t: 90, k: 'kill', v: 3, vx: 700, vy: 800 },
   ]
@@ -158,9 +158,13 @@ describe('markersAt', () => {
     expect(markersAt(events, 50, 100).crates[0]!.falling).toBe(false)
   })
 
+  it('marks the red box, and defaults to ordinary on a pre-v12 bundle', () => {
+    expect(markersAt(events, 60, 100).crates[0]!.rare).toBe(true)
+  })
+
   it('treats a crate with no landing tick as landed rather than dropping it', () => {
     const old: BundleEvent[] = [{ t: 10, k: 'cp', x: 1, y: 2 }]
-    expect(markersAt(old, 20, 100).crates).toEqual([{ x: 1, y: 2, falling: false, pkg: -1 }])
+    expect(markersAt(old, 20, 100).crates).toEqual([{ x: 1, y: 2, falling: false, rare: false }])
   })
 
   it('fades an abandoned vehicle out and then stops drawing it', () => {

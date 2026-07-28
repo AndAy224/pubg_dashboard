@@ -5,6 +5,7 @@ Every case here guards a failure that renders successfully and is wrong.
 
 from __future__ import annotations
 
+import collections
 import datetime as dt
 import pathlib
 
@@ -12,13 +13,18 @@ import pytest
 
 from pubg_dashboard.telemetry import events as E
 from pubg_dashboard.telemetry import reader
+from pubg_dashboard.telemetry.frames import FLAG_RED_ZONE, FrameIndex
 from pubg_dashboard.telemetry.heatmap import (
     ALL,
     GRID,
     KIND_MOVEMENT,
     HeatmapAccumulator,
 )
-from pubg_dashboard.telemetry.world import WorldTracker
+from pubg_dashboard.telemetry.world import (
+    WorldTracker,
+    is_crate_rare,
+    is_flare_vehicle,
+)
 
 DATA = pathlib.Path(__file__).resolve().parents[2] / "data"
 WORLD = 816_000
@@ -328,3 +334,211 @@ def test_corpus_grid_indices_stay_in_range() -> None:
     rows = h.rows()
     assert rows
     assert all(0 <= r["grid_x"] < GRID and 0 <= r["grid_y"] < GRID for r in rows)
+
+
+# ---------------------------------------------------------------------------
+# Red zones (parser v12)
+# ---------------------------------------------------------------------------
+
+
+def _corpus_telemetry(limit: int) -> list[pathlib.Path]:
+    tele = DATA / "telemetry"
+    if not tele.is_dir():
+        return []
+    return sorted(tele.glob("*.json.gz"))[:limit]
+
+
+def _world_for(path: pathlib.Path) -> tuple[WorldTracker, list[dict], float]:
+    events = reader.load(path.read_bytes())
+    t0 = next(
+        (
+            reader.ts(e.get("_D"))
+            for e in events
+            if reader.norm(e.get("_T", "")) == reader.norm(E.MATCH_START)
+        ),
+        0.0,
+    )
+    w = WorldTracker(t0, WORLD)
+    last = t0
+    for e in events:
+        w.feed(e)
+        last = max(last, reader.ts(e.get("_D")))
+    w.finalise_red_zones(last - t0)
+    return w, events, t0
+
+
+def test_corpus_red_zones_exist_and_have_a_complete_lifecycle() -> None:
+    """The claim this overturns was in four documents at once.
+
+    CLAUDE.md, BUILD-SPEC §3.9, HANDOFF §5.15 and `world.py` all said red zones
+    were gone from Erangel, because `LogGameStatePeriodic.redZone*` is 0 in
+    every archived match. That is true of those *fields*. The feature lives in
+    `LogSpecialZoneInCharacters`.
+    """
+    paths = _corpus_telemetry(20)
+    if not paths:
+        pytest.skip("no archived corpus; run scripts/panic_archive.py")
+
+    with_zones = 0
+    counts: list[int] = []
+    for path in paths:
+        w, _events, _t0 = _world_for(path)
+        if not w.red_zones:
+            continue
+        with_zones += 1
+        counts.append(len(w.red_zones))
+        for z in w.red_zones:
+            assert z.start_t_s is not None and z.end_t_s is not None, path.name
+            # Monotonic, and bounded. An unclosed zone renders as a
+            # bombardment that never stops, which reads as a long fight.
+            assert z.warn_t_s <= z.start_t_s <= z.end_t_s, (path.name, z)
+            assert 0 < z.end_t_s - z.start_t_s < 120, (path.name, z)
+            # 395-500 m measured. Not asserted exactly: PUBG tunes it.
+            assert 20_000 < z.radius < 90_000, (path.name, z)
+
+    assert with_zones / len(paths) >= 0.85, f"{with_zones}/{len(paths)} matches had red zones"
+    # Seven per match in every match measured. Bounded rather than pinned, so
+    # a balance change is not a test failure.
+    assert min(counts) >= 4 and max(counts) <= 12, counts
+
+
+def test_corpus_red_zone_geometry_agrees_with_the_position_flags() -> None:
+    """The check that actually proves the circles are in the right place.
+
+    `charactersInZone` and `character.isInRedZone` come from **two independent
+    event streams** — the special-zone event and the position stream — so
+    agreement is real evidence rather than a restatement. If the position or
+    radius were being read from the wrong field, these two would disagree and
+    nothing else written here would notice: a red circle drawn in the wrong
+    place still looks exactly like a red circle.
+    """
+    paths = _corpus_telemetry(20)
+    if not paths:
+        pytest.skip("no archived corpus; run scripts/panic_archive.py")
+
+    checked = 0
+    for path in paths:
+        w, events, t0 = _world_for(path)
+        if not w.red_zones:
+            continue
+
+        # Every position sample that reported being in a red zone, by account.
+        fi = FrameIndex(int(t0 * 1000), WORLD)
+        for e in events:
+            fi.feed(e)
+        flagged: list[tuple[str, float, float, float]] = []
+        for account in fi.accounts():
+            for sample in fi.samples_for(account):
+                if sample.flags & FLAG_RED_ZONE:
+                    flagged.append((account, sample.t_ms / 1000.0 - t0, sample.x, sample.y))
+        if not flagged:
+            continue
+
+        # Each flagged sample must sit inside some red zone that was *drawn*
+        # around then — from the **warning**, not from the start of the
+        # bombardment.
+        #
+        # Measured while writing this: a sample at t=633 s sits 29,157 cm from
+        # a zone of radius 43,550 that was warned at 631.3 s and did not start
+        # bombing until 676.3 s. So `character.isInRedZone` means "inside the
+        # red circle", not "being bombed" — the flag is on for the whole 45 s
+        # of warning. A test window keyed on `start_t_s` fails, and it fails
+        # for a reason that says something true about the data.
+        #
+        # Generous on both axes: position samples are up to 10 s apart, and the
+        # flag is set by the engine rather than by our arithmetic.
+        for _account, t_s, x, y in flagged:
+            inside = any(
+                z.warn_t_s - 15 <= t_s <= (z.end_t_s or 0) + 15
+                and ((x - z.x) ** 2 + (y - z.y) ** 2) ** 0.5 <= z.radius * 1.5
+                for z in w.red_zones
+            )
+            assert inside, f"{path.name}: sample at {t_s:.0f}s ({x:.0f},{y:.0f}) in no red zone"
+            checked += 1
+
+    assert checked > 0, "no position sample was ever flagged in a red zone"
+
+
+def test_flare_vehicle_deliveries_are_not_rendered_as_loot_crates() -> None:
+    """The guard that matched nothing for the whole life of the feature.
+
+    `FLARE_VEHICLE_PACKAGE` was the literal `"uaz_armored_c"`, which does not
+    occur anywhere in the corpus, so 19 vehicle deliveries were classified as
+    care packages. What actually arrives is `Carapackage_FlareGun_C` and
+    `BP_BRDM_C` — and note PUBG spells it `Carapackage` in three package ids
+    and `Carepackage` in a fourth, which is exactly why this matches on a
+    lowercased substring rather than by equality.
+    """
+    for pid in ("Carapackage_FlareGun_C", "BP_BRDM_C", "Uaz_Armored_C", "bp_brdm_c"):
+        assert is_flare_vehicle(pid), pid
+    for pid in (
+        "Carapackage_RedBox_C",
+        "Carapackage_SmallPackage_NoParachute_C",
+        "Carepackage_SmallPackage_NoParachute_Bluechip_C",
+    ):
+        assert not is_flare_vehicle(pid), pid
+
+    assert is_crate_rare("Carapackage_RedBox_C")
+    assert not is_crate_rare("Carepackage_SmallPackage_NoParachute_Bluechip_C")
+
+    paths = _corpus_telemetry(20)
+    if not paths:
+        pytest.skip("no archived corpus; run scripts/panic_archive.py")
+
+    seen_flare = False
+    for path in paths:
+        w, events, _t0 = _world_for(path)
+        raw = [
+            str((e.get("itemPackage") or {}).get("itemPackageId") or "")
+            for e in events
+            if reader.norm(e.get("_T", "")) == reader.norm(E.CARE_PACKAGE_LAND)
+        ]
+        seen_flare |= any(is_flare_vehicle(pid) for pid in raw)
+        for cp in w.landed:
+            assert not is_flare_vehicle(cp.package_id), (path.name, cp.package_id)
+    assert seen_flare, "no flare deliveries in the sample; the filter proves nothing"
+
+
+def test_phase_changes_carry_the_white_circle_roster() -> None:
+    """`playersInWhiteCircle` is ground truth for the rotation question.
+
+    Each phase **number appears twice** per match, so anything asking "were we
+    in the circle at phase N" must take the later event — the first reports
+    most of the lobby.
+
+    Note what is *not* asserted: that the roster shrinks monotonically. It does
+    not. Measured on one match the sizes run 17, 15, 8, 8, 9, 5 — the circle
+    keeps getting smaller but players keep rotating *into* it, so a later phase
+    can hold more people than an earlier one. Only the overall direction holds.
+    """
+    paths = _corpus_telemetry(10)
+    if not paths:
+        pytest.skip("no archived corpus; run scripts/panic_archive.py")
+
+    saw_duplicate_phase = False
+    for path in paths:
+        w, _events, _t0 = _world_for(path)
+        if not w.phases:
+            continue
+        assert any(p.in_circle for p in w.phases), path.name
+
+        counts = collections.Counter(p.phase for p in w.phases)
+        saw_duplicate_phase |= any(n > 1 for n in counts.values())
+
+        # Last event per phase number, in phase order.
+        last_per_phase: dict[int, int] = {}
+        for p in w.phases:
+            last_per_phase[p.phase] = len(p.in_circle)
+        sizes = [last_per_phase[k] for k in sorted(last_per_phase)]
+        if len(sizes) >= 3:
+            assert sizes[-1] < sizes[0], (path.name, sizes)
+
+        # Every id is a real account, never a bot: `playersInWhiteCircle` is a
+        # list of account ids, and `ai.<n>` appearing here would mean it is
+        # something else.
+        for p in w.phases:
+            for account in p.in_circle:
+                assert account.startswith("account."), (path.name, account)
+
+    assert saw_duplicate_phase, "no phase number repeated; the 'take the last' rule is untested"
+

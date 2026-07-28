@@ -50,7 +50,7 @@ from pubg_dashboard.telemetry.inventory import InventoryTracker, PlayerInventory
 from pubg_dashboard.telemetry.maps import world_size
 from pubg_dashboard.telemetry.reader import load, norm, ts_ms
 from pubg_dashboard.telemetry.strategy import compute_strategy
-from pubg_dashboard.telemetry.world import WorldTracker
+from pubg_dashboard.telemetry.world import WorldTracker, is_crate_rare
 
 log = structlog.get_logger(__name__)
 
@@ -146,6 +146,7 @@ def parse_telemetry(
     # `LogPlayerUseThrowable` in the same millisecond in either order, so an
     # attack cannot know whether it is a throw when it arrives.
     combat.resolve_accuracy()
+    world.finalise_red_zones((last_ms - meta.t0_ms) / 1000.0)
 
     # Kill/death/knock bins come from the combat tracker rather than the raw
     # stream, so `kill_events` and the heatmap can never disagree about where
@@ -203,6 +204,7 @@ def parse_telemetry(
         pos=frames.build(order, tick_ms),
         events=_event_track(combat, world, index, dicts, ws, tick_ms),
         zones=_zone_track(world, ws, tick_ms),
+        red_zones=_red_zone_track(world, ws, tick_ms),
         plane=_plane(world, ws),
         inv=_inventory_track(inventory, index, dicts["items"], meta.t0_ms, tick_ms),
         hits=_hit_track(combat, index, dicts, ws, tick_ms),
@@ -384,6 +386,9 @@ def _event_track(
             "x": quantise(cp.x, ws), "y": quantise(cp.y, ws),
             "land": _tick(cp.land_t_s or 0.0, tick_ms),
             "items": [dicts["items"].intern(i) for i in cp.items],
+            # Crate rarity. 500 of the corpus landings are the red box, and
+            # until now the bundle could not tell one apart from a small drop.
+            "rare": is_crate_rare(cp.package_id),
         })
     for ride in world.rides:
         out.append({
@@ -398,11 +403,45 @@ def _event_track(
                 "x": quantise(ride.left_x or 0.0, ws), "y": quantise(ride.left_y or 0.0, ws),
                 "dist": int(ride.ride_distance or 0),
             })
-    for t_s, phase in world.phases:
-        out.append({"t": _tick(t_s, tick_ms), "k": "phase", "ph": phase})
+    for ph in world.phases:
+        out.append({
+            "t": _tick(ph.t_s, tick_ms),
+            "k": "phase",
+            "ph": ph.phase,
+            # Player indices, not account ids — the bundle interns everyone
+            # once. NULL_PLAYER is skipped: a spectator or a late joiner has no
+            # roster entry, and an index of 255 would draw as player 255.
+            "inCircle": sorted(
+                i for i in (index.get(a, -1) for a in ph.in_circle) if i >= 0
+            ),
+        })
 
     out.sort(key=lambda e: e["t"])
     return out
+
+
+def _red_zone_track(world: WorldTracker, ws: int, tick_ms: int) -> list[dict[str, Any]]:
+    """The red-zone bombardments, as discrete objects.
+
+    Seven per match, so ~200 bytes gzipped against a ~133 KB bundle — which is
+    why they are a list of small maps rather than parallel typed arrays. The
+    `hits` section uses arrays because it has an order of magnitude more
+    entries; this does not.
+
+    `uniqueId` is deliberately **not** emitted: it is match-scoped (0..6 in
+    every match) and would collide the instant anyone treated it as an identity.
+    """
+    return [
+        {
+            "t": _tick(z.warn_t_s, tick_ms),
+            "t0": _tick(z.start_t_s if z.start_t_s is not None else z.warn_t_s, tick_ms),
+            "t1": _tick(z.end_t_s if z.end_t_s is not None else z.warn_t_s, tick_ms),
+            "x": quantise(z.x, ws),
+            "y": quantise(z.y, ws),
+            "r": quantise(z.radius, ws),
+        }
+        for z in world.red_zones
+    ]
 
 
 def _zone_track(world: WorldTracker, ws: int, tick_ms: int) -> dict[str, Any]:
@@ -418,10 +457,14 @@ def _zone_track(world: WorldTracker, ws: int, tick_ms: int) -> dict[str, Any]:
         "wx": pack_u16([quantise(s.white_x, ws) for s in z]),
         "wy": pack_u16([quantise(s.white_y, ws) for s in z]),
         "wr": pack_u16([quantise(s.white_r, ws) for s in z]),
-        # all-zero on the current patch; the renderer must guard r > 0
-        "rx": pack_u16([quantise(s.red_x, ws) for s in z]),
-        "ry": pack_u16([quantise(s.red_y, ws) for s in z]),
-        "rr": pack_u16([quantise(s.red_r, ws) for s in z]),
+        # `rx`/`ry`/`rr` are GONE as of parser v12. They came from
+        # `LogGameStatePeriodic.redZone*`, which is 0 in every archived match,
+        # and they were shipped anyway "in case". Red zones are real — they
+        # live in `LogSpecialZoneInCharacters` and now have their own
+        # `redZones` section. Leaving three permanently-zero arrays here is an
+        # invitation to backfill the discrete track into them, which would
+        # resample a 45 s warning and a 30 s bombardment into one radius and
+        # lose the distinction that matters.
         "alive": pack_u8([s.alive_players for s in z]),
         "teams": pack_u8([s.alive_teams for s in z]),
     }
