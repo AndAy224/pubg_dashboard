@@ -133,7 +133,7 @@ describe('trailPoints', () => {
 describe('markersAt', () => {
   const events: BundleEvent[] = [
     { t: 10, k: 'kill', v: 1, vx: 100, vy: 200 },
-    { t: 20, k: 'cp', x: 300, y: 400, land: 50, rare: true },
+    { t: 20, k: 'cp', x: 300, y: 400, land: 50, rare: true, loot: 70, items: [1, 2], qty: [1, 90] },
     { t: 30, k: 'leave', p: 2, x: 500, y: 600 },
     { t: 90, k: 'kill', v: 3, vx: 700, vy: 800 },
   ]
@@ -162,9 +162,31 @@ describe('markersAt', () => {
     expect(markersAt(events, 60, 100).crates[0]!.rare).toBe(true)
   })
 
+  it('opens the crate only once somebody has looted it', () => {
+    // Landed at 50, first looted at 70. Between those it is a closed crate,
+    // which is the state that says "there is still something in there".
+    expect(markersAt(events, 60, 100).crates[0]!.looted).toBe(false)
+    expect(markersAt(events, 70, 100).crates[0]!.looted).toBe(true)
+  })
+
+  it('carries contents with their quantities', () => {
+    const c = markersAt(events, 60, 100).crates[0]!
+    // 90, not 3: three 30-round stacks are aggregated by the parser, because
+    // "7.62mm x3" is a believable number and wrong by a factor of thirty.
+    expect(c.items).toEqual([1, 2])
+    expect(c.qty).toEqual([1, 90])
+  })
+
+  it('defaults quantities to 1 on a pre-v13 bundle rather than to 0', () => {
+    const old: BundleEvent[] = [{ t: 1, k: 'cp', x: 0, y: 0, items: [4, 5] }]
+    expect(markersAt(old, 10, 100).crates[0]!.qty).toEqual([1, 1])
+  })
+
   it('treats a crate with no landing tick as landed rather than dropping it', () => {
     const old: BundleEvent[] = [{ t: 10, k: 'cp', x: 1, y: 2 }]
-    expect(markersAt(old, 20, 100).crates).toEqual([{ x: 1, y: 2, falling: false, rare: false }])
+    expect(markersAt(old, 20, 100).crates).toEqual([
+      { x: 1, y: 2, falling: false, looted: false, items: [], qty: [], rare: false },
+    ])
   })
 
   it('fades an abandoned vehicle out and then stops drawing it', () => {

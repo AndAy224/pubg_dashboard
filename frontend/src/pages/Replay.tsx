@@ -5,13 +5,14 @@ import { ApiError, get, getBytes } from '../api/client'
 import type { MatchDetail, PlayerCard, TileInfo } from '../api/types'
 import { decodeBundle, dictName, NULL_PLAYER } from '../lib/replayBundle'
 import type { ReplayBundle } from '../lib/replayBundle'
-import { duration, gameMode, weaponName } from '../lib/format'
+import { duration, gameMode, itemName, weaponName } from '../lib/format'
 import { hex, teamColour, BOT_COLOUR } from '../lib/palette'
 import { playerColour, registerPlayers } from '../lib/players'
 import { ReplayCanvas } from '../replay/ReplayCanvas'
 import { Timeline } from '../replay/Timeline'
 import { InventoryPanel } from '../replay/Inventory'
 import type { Renderer } from '../replay/engine/Renderer'
+import type { CrateMarker } from '../replay/engine/markers'
 import {
   ALIVE,
   KNOCKED,
@@ -32,6 +33,7 @@ export function Replay() {
   const [ready, setReady] = useState(false)
   const [follow, setFollow] = useState<number | null>(null)
   const [renderError, setRenderError] = useState<string | null>(null)
+  const [crate, setCrate] = useState<CrateMarker | null>(null)
 
   const match = useQuery({
     queryKey: ['match', matchId],
@@ -150,6 +152,7 @@ export function Replay() {
           tracked={tracked}
           onReady={onReady}
           onError={setRenderError}
+          onCrateSelect={setCrate}
         />
         <TopBar match={match.data} bundle={bundle} />
 
@@ -163,6 +166,10 @@ export function Replay() {
             playerIndex={follow}
             onClose={() => onFollow(null)}
           />
+        )}
+
+        {crate && (
+          <CratePanel bundle={bundle} crate={crate} onClose={() => setCrate(null)} />
         )}
 
         {renderError && (
@@ -469,6 +476,66 @@ function TeamList({
         </div>
       ))}
       </div>
+    </div>
+  )
+}
+
+
+/**
+ * What is in the crate you clicked.
+ *
+ * The contents have shipped in every bundle since the parser was written and
+ * were never shown — `LogCarePackageLand` carries the full item list, so this
+ * costs no request and no extra parse.
+ *
+ * Quantities are real: a red box holds three 30-round stacks of 7.62mm, which
+ * the parser aggregates to 90. Before v13 the stack counts were dropped and
+ * the same crate would have read "7.62mm x3".
+ */
+function CratePanel({
+  bundle,
+  crate,
+  onClose,
+}: {
+  bundle: ReplayBundle
+  crate: CrateMarker
+  onClose: () => void
+}) {
+  const contents = crate.items.map((idx, i) => ({
+    // `withPiece`: there is no slot label here, so bare "Lv3" three times
+    // over would be the entire armour contents of a red box.
+    name: itemName(dictName(bundle.dicts, 'items', idx), { withPiece: true }),
+    qty: crate.qty[i] ?? 1,
+  }))
+
+  const state = crate.falling ? 'in the air' : crate.looted ? 'looted' : 'untouched'
+
+  return (
+    <div className="crate-card">
+      <div className="crate-head">
+        <strong>{crate.rare ? 'Red box' : 'Supply drop'}</strong>
+        {/* The state is the point of clicking a crate mid-match: "untouched"
+            means everything below is still in there. */}
+        <span className={`tag ${crate.looted ? '' : 'good-tag'}`}>{state}</span>
+        <button className="crate-close" onClick={onClose} title="close">
+          x
+        </button>
+      </div>
+      {contents.length === 0 ? (
+        // Real: 1 of 220 corpus crates lands with an empty item list.
+        <div className="empty small">no contents recorded</div>
+      ) : (
+        <ul className="crate-items">
+          {contents.map((c, i) => (
+            <li key={i}>
+              <span>{c.name}</span>
+              {/* x1 on a gun is noise; the multiplier only appears when it
+                  says something. */}
+              {c.qty > 1 && <span className="num faint">x{c.qty}</span>}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   )
 }

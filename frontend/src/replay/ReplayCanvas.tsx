@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { Application } from 'pixi.js'
 import type { ReplayBundle } from '../lib/replayBundle'
+import type { CrateMarker } from './engine/markers'
 import { Renderer } from './engine/Renderer'
 import { reset } from './store'
 import { apiBase } from '../api/client'
@@ -20,6 +21,7 @@ export function ReplayCanvas({
   tracked,
   onReady,
   onError,
+  onCrateSelect,
 }: {
   bundle: ReplayBundle
   sourcePx: number
@@ -29,6 +31,7 @@ export function ReplayCanvas({
   tracked: Set<string>
   onReady: (r: Renderer) => void
   onError?: (message: string) => void
+  onCrateSelect?: (crate: CrateMarker | null) => void
 }) {
   const holder = useRef<HTMLDivElement>(null)
 
@@ -71,6 +74,7 @@ export function ReplayCanvas({
         maxZoom,
         tracked,
         onError,
+        onCrateSelect,
       })
       renderer.start()
       // Deliberately global. Three replay bugs in a row were only findable by
@@ -104,7 +108,7 @@ export function ReplayCanvas({
       // destroys the app properly once init resolves.
       if (initialised) app?.destroy(true, { children: true, texture: true })
     }
-  }, [bundle, sourcePx, tilePx, imageScale, maxZoom, tracked, onReady, onError])
+  }, [bundle, sourcePx, tilePx, imageScale, maxZoom, tracked, onReady, onError, onCrateSelect])
 
   return <div ref={holder} className="canvas-holder" />
 }

@@ -363,6 +363,7 @@ def _world_for(path: pathlib.Path) -> tuple[WorldTracker, list[dict], float]:
     for e in events:
         w.feed(e)
         last = max(last, reader.ts(e.get("_D")))
+    w.finalise_care_packages()
     w.finalise_red_zones(last - t0)
     return w, events, t0
 
@@ -541,4 +542,107 @@ def test_phase_changes_carry_the_white_circle_roster() -> None:
                 assert account.startswith("account."), (path.name, account)
 
     assert saw_duplicate_phase, "no phase number repeated; the 'take the last' rule is untested"
+
+
+def test_care_package_contents_keep_their_stack_counts() -> None:
+    """A crate's ammo is stacks, and the stack size is the whole number.
+
+    `cp.items` used to be item ids alone. A red box holding three 30-round
+    stacks of 7.62mm therefore reached the client as three entries, which a UI
+    renders as "7.62mm x3" — a completely believable quantity, and wrong by a
+    factor of thirty. Ammo is the common case: measured over the corpus, stacks
+    run 10 to 90 and appear in the great majority of crates.
+    """
+    paths = _corpus_telemetry(20)
+    if not paths:
+        pytest.skip("no archived corpus; run scripts/panic_archive.py")
+
+    with_items = 0
+    big_stacks = 0
+    for path in paths:
+        w, _events, _t0 = _world_for(path)
+        for cp in w.landed:
+            if not cp.items:
+                continue
+            with_items += 1
+            for item_id, qty in cp.items:
+                assert item_id, path.name
+                # 1 is a real quantity (a gun); 0 or negative is not.
+                assert qty >= 1, (path.name, item_id, qty)
+                if qty > 1:
+                    big_stacks += 1
+
+    assert with_items > 20, "too few crates with contents to conclude anything"
+    # If this ever hits zero, `stackCount` has moved or been dropped again and
+    # every crate silently reads as single items.
+    assert big_stacks > 0, "no stack larger than 1 anywhere; stackCount is being lost"
+
+
+def test_crate_contents_are_aggregated_per_item() -> None:
+    """Three stacks of 30 become one entry of 90, not three of 30.
+
+    Pure arithmetic, tested apart from the corpus because the corpus cannot
+    show the empty and single cases.
+    """
+    from pubg_dashboard.telemetry.parse import _crate_contents
+
+    assert _crate_contents([]) == []
+    assert _crate_contents([("Item_Weapon_MG3_C", 1)]) == [("Item_Weapon_MG3_C", 1)]
+    assert _crate_contents(
+        [("Item_Ammo_762mm_C", 30), ("Item_Ammo_762mm_C", 30), ("Item_Ammo_762mm_C", 30)]
+    ) == [("Item_Ammo_762mm_C", 90)]
+    # First-seen order preserved: PUBG lists the weapon before its ammo, which
+    # is the order anyone reads a crate in.
+    assert _crate_contents(
+        [("Item_Weapon_MG3_C", 1), ("Item_Ammo_762mm_C", 30), ("Item_Weapon_MG3_C", 1)]
+    ) == [("Item_Weapon_MG3_C", 2), ("Item_Ammo_762mm_C", 30)]
+    # A missing or zero count is a quantity of one, never zero: an item that is
+    # in the crate must never render as "x0".
+    assert _crate_contents([("Item_Boost_EnergyDrink_C", 0)]) == [
+        ("Item_Boost_EnergyDrink_C", 1)
+    ]
+
+
+def test_looted_crates_are_matched_to_the_right_crate() -> None:
+    """"Opened" is real, and the join that produces it has no id to lean on.
+
+    `LogItemPickupFromCarepackage` has a `carePackageUniqueId`;
+    `LogCarePackageLand` has no id at all. So the match is position plus
+    package name, and this pins the two measurements that make it safe:
+    nobody loots a crate from far away, and the crate they are standing on is
+    always of the type they say they looted.
+    """
+    paths = _corpus_telemetry(20)
+    if not paths:
+        pytest.skip("no archived corpus; run scripts/panic_archive.py")
+
+    looted = unlooted = 0
+    for path in paths:
+        w, events, _t0 = _world_for(path)
+        pickups = [
+            e
+            for e in events
+            if reader.norm(e.get("_T", "")) == reader.norm(E.ITEM_PICKUP_FROM_CAREPACKAGE)
+        ]
+        for cp in w.landed:
+            if cp.looted_t_s is None:
+                unlooted += 1
+                continue
+            looted += 1
+            # Nobody opens a crate before it lands.
+            assert cp.land_t_s is None or cp.looted_t_s >= cp.land_t_s - 1, (
+                path.name,
+                cp.package_id,
+            )
+        # Every crate that was looted has at least one pickup naming its type.
+        names = {str(e.get("carePackageName") or "") for e in pickups}
+        for cp in w.landed:
+            if cp.looted_t_s is not None:
+                assert cp.package_id in names, (path.name, cp.package_id)
+
+    assert looted > 0, "no crate was ever looted; the match found nothing"
+    # **Both outcomes must occur.** If every crate reads as looted the join is
+    # matching anything nearby; if none do, it is matching nothing. Plenty of
+    # crates land where nobody goes.
+    assert unlooted > 0, "every crate reads as looted; the match is too loose"
 

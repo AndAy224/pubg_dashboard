@@ -146,6 +146,7 @@ def parse_telemetry(
     # `LogPlayerUseThrowable` in the same millisecond in either order, so an
     # attack cannot know whether it is a throw when it arrives.
     combat.resolve_accuracy()
+    world.finalise_care_packages()
     world.finalise_red_zones((last_ms - meta.t0_ms) / 1000.0)
 
     # Kill/death/knock bins come from the combat tracker rather than the raw
@@ -385,7 +386,15 @@ def _event_track(
             "k": "cp",
             "x": quantise(cp.x, ws), "y": quantise(cp.y, ws),
             "land": _tick(cp.land_t_s or 0.0, tick_ms),
-            "items": [dicts["items"].intern(i) for i in cp.items],
+            # Aggregated by item, so three 30-round stacks of 7.62mm reach the
+            # client as one entry of 90 rather than three entries of 30. That
+            # is what a player means by "what is in the crate"; the stack
+            # boundaries are an inventory detail nobody is looking for here.
+            "items": [dicts["items"].intern(i) for i, _q in _crate_contents(cp.items)],
+            "qty": [q for _i, q in _crate_contents(cp.items)],
+            # When someone first took something out of it. Absent means nobody
+            # ever did — which is a real and common outcome, not missing data.
+            **({"loot": _tick(cp.looted_t_s, tick_ms)} if cp.looted_t_s is not None else {}),
             # Crate rarity. 500 of the corpus landings are the red box, and
             # until now the bundle could not tell one apart from a small drop.
             "rare": is_crate_rare(cp.package_id),
@@ -418,6 +427,18 @@ def _event_track(
 
     out.sort(key=lambda e: e["t"])
     return out
+
+
+def _crate_contents(items: Sequence[tuple[str, int]]) -> list[tuple[str, int]]:
+    """Sum stack counts per item, preserving first-seen order.
+
+    Order matters a little: PUBG lists the weapon first and the ammo after it,
+    which is the order anyone reads a crate in.
+    """
+    totals: dict[str, int] = {}
+    for item_id, qty in items:
+        totals[item_id] = totals.get(item_id, 0) + max(1, qty)
+    return list(totals.items())
 
 
 def _red_zone_track(world: WorldTracker, ws: int, tick_ms: int) -> list[dict[str, Any]]:

@@ -61,6 +61,18 @@ FLARE_VEHICLE_MARKERS: Final = ("uaz_armored", "bp_brdm", "flaregun")
 #: Crate rarity, for the replay marker. Substring again, same reason.
 CRATE_RARE_MARKER: Final = "redbox"
 
+#: How near a looter has to be to the crate they looted, in centimetres.
+#:
+#: Measured over 269 pickups: the **worst** distance is 286 cm and the median
+#: is 132 — you stand on the crate to loot it. 10 m is therefore generous by a
+#: factor of three and still nowhere near the scale of the map.
+#:
+#: The threshold is not what disambiguates, though. Two crates can land **0 cm
+#: apart** (21 pickups had more than one crate within 10 m), so the package
+#: name is the real discriminator: the nearest crate's `itemPackageId` matched
+#: the pickup's `carePackageName` in 269 of 269 cases.
+LOOT_MATCH_MAX_CM: Final = 1_000.0
+
 _RED_ZONE_TYPE: Final = "redzone"
 _ZONE_WARNING: Final = "warning"
 _ZONE_ACTIVATING: Final = "activating"
@@ -159,7 +171,16 @@ class CarePackage:
     x: float
     y: float
     package_id: str
-    items: list[str] = field(default_factory=list)
+    #: `(itemId, stackCount)`. **The count is load-bearing**: a red box holds
+    #: three 30-round stacks of 7.62mm, and dropping the counts renders that as
+    #: "7.62mm x3" — three bullets instead of ninety, which is a believable
+    #: number and the wrong one. Measured across the corpus, ammo stacks are 10
+    #: to 90 and boosts/smokes come in twos.
+    items: list[tuple[str, int]] = field(default_factory=list)
+    #: When someone first took something out of it, or None if nobody did.
+    #: Resolved in `finalise_care_packages` — see there for why the join is by
+    #: position and package name rather than by an id.
+    looted_t_s: float | None = None
 
 
 @dataclass(slots=True)
@@ -190,6 +211,7 @@ class WorldTracker:
     """Zones, care packages, vehicles and the flight path for one match."""
 
     __slots__ = (
+        "_loots",
         "_open_red",
         "_plane_points",
         "_rides",
@@ -214,6 +236,8 @@ class WorldTracker:
         # same second as the Deactivating of zone N.
         self._open_red: dict[int, RedZone] = {}
         self._spawns: list[tuple[float, float, float, str]] = []
+        #: `(t_s, x, y, carePackageName)`, resolved against `landed` at the end.
+        self._loots: list[tuple[float, float, float, str]] = []
         self.landed: list[CarePackage] = []
         self._rides: dict[tuple[str, str], VehicleRide] = {}
         self.rides: list[VehicleRide] = []
@@ -243,6 +267,10 @@ class WorldTracker:
             self._package_spawn(event)
         elif kind == norm(E.CARE_PACKAGE_LAND):
             self._package_land(event)
+        elif kind == norm(E.ITEM_PICKUP_FROM_CAREPACKAGE):
+            character = event.get("character") or {}
+            x, y, _ = E.location(character)
+            self._loots.append((self._rel(event), x, y, str(event.get("carePackageName") or "")))
         elif kind == norm(E.VEHICLE_RIDE):
             self._ride(event)
         elif kind == norm(E.VEHICLE_LEAVE):
@@ -294,7 +322,7 @@ class WorldTracker:
             return
         x, y, _ = E.location(package)
         items = [
-            str(i.get("itemId"))
+            (str(i.get("itemId")), int(i.get("stackCount") or 1))
             for i in (package.get("items") or [])
             if isinstance(i, Mapping) and i.get("itemId")
         ]
@@ -348,6 +376,42 @@ class WorldTracker:
             zone.end_t_s = t
             self.red_zones.append(zone)
             del self._open_red[unique_id]
+
+    def finalise_care_packages(self) -> None:
+        """Mark each crate with the first time anyone took something from it.
+
+        **There is no id to join on.** `LogItemPickupFromCarepackage` carries a
+        `carePackageUniqueId`, but `LogCarePackageLand` does not carry it or
+        anything else identifying — its `itemPackage` has exactly
+        `itemPackageId`, `items` and `location` — and the pickup's uniqueId is
+        a small per-match sequence (0-4) that means nothing on its own.
+
+        So the join is position plus package name, and both parts are needed:
+        the looter is within 286 cm of the crate in the worst observed case,
+        but two crates can land **0 cm apart**, and the nearest crate's
+        `itemPackageId` matched the pickup's `carePackageName` in 269 of 269
+        measured pickups.
+
+        Stated limit: two crates of the *same type* stacked on the same spot
+        cannot be told apart, and the earlier one wins. They are also drawn on
+        top of each other, so the picture is right either way.
+
+        Resolved after the pass rather than during it, so nothing depends on a
+        pickup arriving after its land event.
+        """
+        for t_s, x, y, name in self._loots:
+            best: CarePackage | None = None
+            best_d = LOOT_MATCH_MAX_CM
+            for cp in self.landed:
+                if name and cp.package_id != name:
+                    continue
+                d = math.hypot(cp.x - x, cp.y - y)
+                if d < best_d:
+                    best, best_d = cp, d
+            if best is None:
+                continue
+            if best.looted_t_s is None or t_s < best.looted_t_s:
+                best.looted_t_s = t_s
 
     def finalise_red_zones(self, duration_s: float) -> None:
         """Close any zone still open when the stream ended.

@@ -1550,3 +1550,114 @@ detail → poll time restored → alert resolves → the row survives closed.
   Now a 422 that lists the valid kinds.
 * **`logging.py`**, specced in BUILD-SPEC and never written. Console renderer on
   a terminal, JSON under systemd where the journal is the only record.
+
+---
+
+## 28. Crates: PUBG's own art, contents on click, and open when looted — 2026-07-29
+
+Three changes to the same marker, in the order they were asked for.
+
+### The square was the same shape as a player dot
+
+Care packages were gold and red squares; player dots are team-coloured squares
+at nearly the same size. The only difference was hue, over satellite imagery
+that is yellow-brown through every town. Evidence it actually misleads:
+reading a screenshot of this renderer, a cluster of player squares was taken
+for care packages and only the instrumented `crates: 0` counter settled it.
+
+PUBG publishes the art in `pubg/api-assets` under `Assets/Icons/CarePackage` —
+the same repo the map tiles come from. Vendored into `frontend/public/crates/`
+(29 KB) rather than fetched at build time, like the self-hosted fonts. They are
+**not** Git-LFS pointers, unlike that repo's High_Res map PNGs.
+
+Three details the real art forces, none of which applied to a square:
+
+* **Never tint them.** They already carry PUBG's red/blue/white and `tint`
+  multiplies. Rarity is size instead — which is honest anyway, since PUBG's own
+  art does not separate a red box from a small drop. The hand-drawn fallback is
+  kept monochrome precisely so it *can* be tinted.
+* **Anchor on the box, not the centre.** The flying icon is 144x200 with the
+  canopy above; centre-anchoring hangs the crate below where it lands.
+* **Size it as a landmark**, 22 px (30 px red box) against a 10 px player dot.
+  The first cut reused the square's size and drew a 14 px white blob: an
+  illustration needs more pixels to read than a plain shape does.
+
+Measured before wiring the parachute up, because two of the three package types
+are literally named `NoParachute`:
+
+| package | spawn → land | n |
+|---|---:|---:|
+| `Carapackage_RedBox_C` | **53.6 s** | 73 |
+| `..._SmallPackage_NoParachute_C` | **0.0 s** | 40 |
+| `..._NoParachute_Bluechip_C` | **0.0 s** | 99 |
+
+The names are honest. Those land in the instant they spawn, so `falling` is
+never true for them and a canopy cannot appear on something that does not fall.
+Also measured: **0 of 216** spawn/land pairings matched a spawn with a
+different `itemPackageId`, so the XY-nearest pairing that ignores package id has
+never mis-paired.
+
+### Contents on click, and the stack counts that were being dropped
+
+`LogCarePackageLand` has carried the full item list since the parser was
+written and nothing ever showed it. But `cp.items` kept only item **ids** — so
+a red box holding three 30-round stacks of 7.62mm reached the client as three
+entries, which renders as **"7.62mm x3"**: a completely believable quantity,
+wrong by a factor of thirty. Parser **v13** carries quantities, aggregated per
+item (three stacks of 30 arrive as one 90).
+
+Clicking is Pixi hit-testing on the crate sprites, and two things had to be
+true for it to work:
+
+* **A pan must not count as a click.** The viewport pans on any pointer-move
+  over the canvas, so `Viewport.dragged` now reports whether the pointer
+  travelled more than 4 px since pointerdown. Without it, every pan that
+  happened to finish over a crate would open the panel, and the map is covered
+  in crates by the end of a match.
+* **Only the crate layer is interactive.** Pixi hit-tests the whole scene graph
+  on every pointer move, and this one holds ~100 dots, ~100 labels, the tile
+  grid and several `Graphics` whose bounds are the entire world — the same
+  "bounds are the whole map" property that made `cacheAsTexture` allocate
+  268 MB in §16. Every other layer is now `eventMode: 'none'`.
+
+`itemName` gained `withPiece`, because armour reduced to its tier is right in
+the inventory panel (the slot label names the piece) and useless in a crate:
+the three armour pieces rendered as **"Lv3", "Lv3", "Lv3"**. Calibres also got
+their decimal point back — PUBG's ids spell it `556mm`, which reads as a number
+rather than a cartridge.
+
+### Open when looted
+
+`LogItemPickupFromCarepackage` fires ~31 times a match, so "has anyone taken
+anything out of this" is answerable — but **there is no id to join on**. The
+pickup carries a `carePackageUniqueId`; `LogCarePackageLand` carries no id at
+all (its `itemPackage` is exactly `itemPackageId`, `items`, `location`), and the
+pickup's uniqueId is a per-match sequence 0–4 that means nothing alone.
+
+Joined on position **and** package name, and both are needed:
+
+* the looter is within **286 cm** of the crate in the worst of 269 measured
+  pickups, median 132 — you stand on it to loot it;
+* but two crates can land **0 cm apart** (21 pickups had more than one crate
+  within 10 m), so proximity alone is ambiguous;
+* the nearest crate's `itemPackageId` matched the pickup's `carePackageName` in
+  **269 of 269**.
+
+Stated limit: two crates of the same type stacked on one spot cannot be told
+apart and the earlier wins — they are drawn on top of each other anyway.
+
+Archive-wide, **166 of 632 crates (26%) are ever looted**. The corpus test
+asserts *both* outcomes occur: if every crate read as looted the join would be
+matching anything nearby, and if none did it would be matching nothing.
+
+Parser **v14**. Bundle average 134,794 → **134,861 bytes**, +0.05%.
+
+### Two probe lessons, both the probe's fault
+
+* Setting `viewport.scale` does not apply the transform — the world container's
+  scale has to be set and `onZoomChange` fired, or the canvas goes black. That
+  looked exactly like a renderer bug.
+* Zooming to level 4 under swiftshader saturates the main thread and **CDP
+  calls time out** (`Runtime.callFunctionOn timed out`), which looks exactly
+  like a wedged page. The fix was to stop zooming, not to raise the timeout:
+  the crate is clickable where it already is.

@@ -182,6 +182,9 @@ tr.tracked td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
 .hero-result { text-align: right; }
 .hs-glyph { color: var(--accent); font-size: 11px; }
 .tag.bad-tag { color: var(--bad); border-color: var(--bad); margin-left: 6px; }
+/* The affirmative counterpart. Used for a care package nobody has opened yet:
+   the loot is still in there, which is the whole reason to look at one. */
+.tag.good-tag { color: var(--good); border-color: var(--good); }
 tr.teamkill td { background: #2a1a1c; }
 
 /* The leader in a compare column, so the eye lands on it without reading. */

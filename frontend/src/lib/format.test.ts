@@ -181,6 +181,29 @@ describe('itemName', () => {
     expect(itemName('Item_Back_F_02_Lv3_C')).toBe('Lv3')
   })
 
+  it('names the armour piece when there is no slot label to do it', () => {
+    // A care package holds a helmet, a vest and a backpack. Without this they
+    // render as "Lv3", "Lv3", "Lv3" — three identical strings describing three
+    // different things, which is worse than no label.
+    expect(itemName('Item_Head_G_01_Lv3_C', { withPiece: true })).toBe('Lv3 Helmet')
+    expect(itemName('Item_Armor_C_01_Lv3_C', { withPiece: true })).toBe('Lv3 Vest')
+    expect(itemName('Item_Back_C_01_Lv3_C', { withPiece: true })).toBe('Lv3 Backpack')
+    // Default stays bare, because the inventory panel prints the slot beside
+    // it and "Helmet: Lv3 Helmet" is silly.
+    expect(itemName('Item_Head_G_01_Lv3_C')).toBe('Lv3')
+  })
+
+  it('puts the decimal point back into a calibre', () => {
+    // PUBG's ids drop it, and "556mm" reads as a number rather than a
+    // cartridge.
+    expect(itemName('Item_Ammo_556mm_C')).toBe('5.56mm')
+    expect(itemName('Item_Ammo_762mm_C')).toBe('7.62mm')
+    expect(itemName('Item_Ammo_9mm_C')).toBe('9mm')
+    // Not calibres in millimetres — left alone.
+    expect(itemName('Item_Ammo_300Magnum_C')).toBe('300 Magnum')
+    expect(itemName('Item_Ammo_12Guage_C')).toBe('12 Guage')
+  })
+
   it('strips attachment decoration down to the part that identifies it', () => {
     expect(itemName('Item_Attach_Weapon_Muzzle_AR_MuzzleBrake_C')).toBe('AR Muzzle Brake')
     expect(itemName('Item_Attach_Weapon_Upper_CQBSS_C')).toBe('CQBSS')
@@ -191,7 +214,8 @@ describe('itemName', () => {
   it('names consumables and ammo', () => {
     expect(itemName('Item_Heal_FirstAid_C')).toBe('First Aid')
     expect(itemName('Item_Boost_EnergyDrink_C')).toBe('Energy Drink')
-    expect(itemName('Item_Ammo_556mm_C')).toBe('556mm')
+    // Calibre formatting has its own test above.
+    expect(itemName('Item_Ammo_556mm_C')).toBe('5.56mm')
   })
 
   it('renders an unknown id rather than blanking the row', () => {

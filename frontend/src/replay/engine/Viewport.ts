@@ -8,10 +8,30 @@ import type { Container } from 'pixi.js'
  * dependency would mean pinning a stale package to the most load-bearing part
  * of the renderer.
  */
+/** Pointer travel, in CSS pixels, above which a press counts as a pan. */
+const DRAG_SLOP_PX = 4
+
 export class Viewport {
   private dragging = false
   private lastX = 0
   private lastY = 0
+  private movedPx = 0
+
+  /**
+   * Did the pointer travel far enough since pointerdown to be a pan?
+   *
+   * Read by click handlers on world objects. The viewport pans on any
+   * pointer-move over the canvas, so without this every pan that happens to
+   * finish over a clickable thing reads as a click on it — and by the end of a
+   * match the map is covered in crates.
+   *
+   * The threshold is deliberately not zero: a real click drifts a pixel or two
+   * between press and release, and requiring an exactly stationary pointer
+   * makes clicking feel broken rather than precise.
+   */
+  get dragged(): boolean {
+    return this.movedPx > DRAG_SLOP_PX
+  }
   private following: number | null = null
   private pendingFit: number | null = null
 
@@ -118,6 +138,7 @@ export class Viewport {
 
   private down = (e: PointerEvent) => {
     this.dragging = true
+    this.movedPx = 0
     this.lastX = e.clientX
     this.lastY = e.clientY
     // A manual drag cancels follow-cam; otherwise the camera fights the user.
@@ -127,6 +148,7 @@ export class Viewport {
 
   private move = (e: PointerEvent) => {
     if (!this.dragging) return
+    this.movedPx += Math.abs(e.clientX - this.lastX) + Math.abs(e.clientY - this.lastY)
     this.world.position.x += e.clientX - this.lastX
     this.world.position.y += e.clientY - this.lastY
     this.lastX = e.clientX

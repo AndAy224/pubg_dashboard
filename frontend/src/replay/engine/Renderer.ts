@@ -1,10 +1,12 @@
 import { Application, Assets, Container, Graphics, Sprite, Text, Texture } from 'pixi.js'
+import type { FederatedPointerEvent } from 'pixi.js'
 import type { ReplayBundle } from '../../lib/replayBundle'
 import { FLAG_ALIVE, FLAG_DBNO, FLAG_DRIVING, FLAG_IN_VEHICLE, NULL_PLAYER } from '../../lib/replayBundle'
 import { BOT_COLOUR, teamColour } from '../../lib/palette'
 import { playerColourInt } from '../../lib/players'
 import { Viewport } from './Viewport'
 import { interpolateAt, markerRadius, markersAt, trailPoints } from './markers'
+import type { CrateMarker } from './markers'
 import { ALIVE, KNOCKED, OUT, publish, publishHealth } from '../store'
 
 /**
@@ -238,6 +240,8 @@ interface Options {
   /** Surfaced in the UI. A renderer that fails silently is a black rectangle
    *  nobody can debug — which is exactly how this page shipped. */
   onError?: (message: string) => void
+  /** A crate was clicked. `null` closes the panel. */
+  onCrateSelect?: (crate: CrateMarker | null) => void
 }
 
 export class Renderer {
@@ -285,9 +289,16 @@ export class Renderer {
    * `tintable` is the difference that matters: PUBG's icons already carry
    * their own colour and must be left alone, so rarity is size-only.
    */
-  private crateTextures: { crate: Texture; chute: Texture; tintable: boolean } | null
+  private crateTextures: {
+    crate: Texture
+    chute: Texture
+    open: Texture
+    tintable: boolean
+  } | null
   /** Pooled crate sprites — at most ~14 per match, so grow-and-hide is enough. */
   private readonly cratePool: Sprite[] = []
+  /** Markers drawn last frame, parallel to `cratePool`, for hit resolution. */
+  private lastCrates: readonly CrateMarker[] = []
 
   /**
    * What the last frame actually put on the canvas.
@@ -334,7 +345,9 @@ export class Renderer {
     this.hpOut = new Uint8Array(b.players.length)
     this.statusOut = new Uint8Array(b.players.length)
     const drawn = buildFallbackCrateTextures(app)
-    this.crateTextures = drawn && { ...drawn, tintable: true }
+    // The fallback has no distinct 'open' glyph; a looted crate reuses the
+    // closed one there rather than inventing a third hand-drawn shape.
+    this.crateTextures = drawn && { ...drawn, open: drawn.crate, tintable: true }
     if (this.crateTextures === null) {
       opts.onError?.('the care-package glyphs could not be built; crates stay squares')
     }
@@ -364,6 +377,29 @@ export class Renderer {
       this.labelLayer,
     )
     app.stage.addChild(this.world)
+
+    // **Only the crates are interactive.** Pixi hit-tests the whole scene
+    // graph on every pointer move, and this one holds ~100 dots, ~100 lazily
+    // built labels, the tile grid, and several `Graphics` whose bounds are the
+    // entire 8192-unit world. Leaving them all eligible makes every mouse
+    // movement walk the lot to find the one sprite that cares.
+    //
+    // The world-sized `Graphics` are the expensive part — the same "bounds are
+    // the whole map" property that made `cacheAsTexture` allocate 268 MB and
+    // blank the canvas (HANDOFF §16).
+    for (const layer of [
+      this.mapLayer,
+      this.gridLayer,
+      this.trailLayer,
+      this.zoneLayer,
+      this.worldLayer,
+      this.tracerLayer,
+      this.dotLayer,
+      this.labelLayer,
+    ]) {
+      layer.eventMode = 'none'
+      layer.interactiveChildren = false
+    }
 
     this.buildGrid()
     this.buildDots()
@@ -1037,13 +1073,23 @@ export class Renderer {
    * is not drawn is indistinguishable from a crate that is not there.
    */
   private async loadCrateArt(): Promise<void> {
-    const [chute, crate] = await Promise.allSettled([
+    const [chute, crate, open] = await Promise.allSettled([
       Assets.load<Texture>('/crates/CarePackage_Flying.png'),
       Assets.load<Texture>('/crates/CarePackage_Normal.png'),
+      Assets.load<Texture>('/crates/CarePackage_Open.png'),
     ])
     if (this.destroyed) return
-    if (chute.status === 'fulfilled' && crate.status === 'fulfilled') {
-      this.crateTextures = { crate: crate.value, chute: chute.value, tintable: false }
+    if (
+      chute.status === 'fulfilled' &&
+      crate.status === 'fulfilled' &&
+      open.status === 'fulfilled'
+    ) {
+      this.crateTextures = {
+        crate: crate.value,
+        chute: chute.value,
+        open: open.value,
+        tintable: false,
+      }
     } else {
       this.opts.onError?.(
         "PUBG's care-package icons could not be loaded; using the drawn fallback",
@@ -1062,24 +1108,42 @@ export class Renderer {
    * The red box is drawn larger as well as redder: it is the one people cross
    * open ground for, so it has to be findable at fit zoom without hunting.
    */
-  private drawCrates(
-    crates: readonly { x: number; y: number; falling: boolean; rare: boolean }[],
-  ): void {
+  private drawCrates(crates: readonly CrateMarker[]): void {
     const tx = this.crateTextures
     if (tx === null) return
     const inv = 1 / this.viewport.scale
+    // Kept so a tap can resolve its sprite back to a marker. Rebuilt each
+    // frame because a crate's state (falling / closed / looted) changes.
+    this.lastCrates = crates
 
     for (let i = 0; i < crates.length; i++) {
       const c = crates[i]!
       let sprite = this.cratePool[i]
       if (sprite === undefined) {
         sprite = new Sprite()
+        // Clickable, so the contents are one tap away. `static` rather than
+        // `dynamic`: these do not move under a stationary cursor.
+        sprite.eventMode = 'static'
+        sprite.cursor = 'pointer'
+        sprite.on('pointerup', (e: FederatedPointerEvent) => {
+          // **Only a tap, never the end of a drag.** The viewport pans on
+          // pointer-move over the whole canvas, so without this every pan that
+          // happened to finish over a crate would open the panel — and the map
+          // is covered in crates by the end of a match.
+          if (this.viewport.dragged) return
+          e.stopPropagation()
+          const index = this.cratePool.indexOf(sprite!)
+          const marker = this.lastCrates[index]
+          if (marker) this.opts.onCrateSelect?.(marker)
+        })
         this.cratePool[i] = sprite
         this.crateLayer.addChild(sprite)
       }
       if (c.rare) this.drawn.rareCrates++
 
-      const texture = c.falling ? tx.chute : tx.crate
+      // Three states, and the middle one is the interesting one: a crate that
+      // has landed and **not** been opened still has everything in it.
+      const texture = c.falling ? tx.chute : c.looted ? tx.open : tx.crate
       // Assigned before the size: `width` derives from the texture's own
       // dimensions, so swapping afterwards would rescale the glyph.
       if (sprite.texture !== texture) sprite.texture = texture
@@ -1107,7 +1171,9 @@ export class Renderer {
       sprite.tint = tx.tintable ? (c.rare ? 0xff4d4d : 0xf0b429) : 0xffffff
       // A falling crate is not lootable yet, and the alpha says so before the
       // parachute does.
-      sprite.alpha = c.falling ? 0.85 : 1
+      // A looted crate is spent. Dimming it keeps the eye on the ones that
+      // still hold something without hiding where the fights already were.
+      sprite.alpha = c.falling ? 0.85 : c.looted ? 0.6 : 1
     }
     for (let i = crates.length; i < this.cratePool.length; i++) {
       this.cratePool[i]!.visible = false

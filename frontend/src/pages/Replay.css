@@ -194,3 +194,27 @@
 /* Rendered *instead of* `.replay`, never inside it — the one selector in this
    file that cannot be scoped. */
 .replay-error { display: grid; place-content: center; gap: 10px; height: 100vh; color: var(--text-dim); }
+
+/* --- Care-package contents ------------------------------------------------ */
+/* Anchored top-right, opposite the loadout card on the left, so selecting a
+   crate while following a player does not make the two fight for the corner. */
+.replay .crate-card {
+  position: absolute; right: 14px; top: 52px; z-index: 3;
+  width: 230px; max-height: calc(100% - 160px); overflow: auto;
+  background: rgba(14,17,22,.94); border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg); padding: 10px 12px;
+  backdrop-filter: blur(6px);
+}
+.replay .crate-head {
+  display: flex; align-items: center; gap: 7px; margin-bottom: 8px;
+  padding-bottom: 7px; border-bottom: 1px solid var(--border);
+}
+.replay .crate-head strong { flex: 1; }
+.replay .crate-close {
+  min-width: 0; padding: 1px 6px; font-size: 11px;
+  background: none; border: 1px solid transparent; color: var(--text-faint);
+}
+.replay .crate-close:hover { color: var(--bad); border-color: var(--border-strong); }
+.replay .crate-items { display: grid; gap: 3px; font-size: 12px; list-style: none; }
+.replay .crate-items li { display: flex; gap: 8px; align-items: baseline; }
+.replay .crate-items li span:first-child { flex: 1; }

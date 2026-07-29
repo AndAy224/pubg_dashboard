@@ -113,8 +113,19 @@ export function trailPoints(
 export interface CrateMarker {
   x: number
   y: number
-  /** True between the spawn tick and the landing tick — it is still in the air. */
+  /** True between the spawn tick and the landing tick — it is still in the air.
+   *
+   *  Only ever true for the red box: the other two package types are literally
+   *  named `NoParachute` and land in the same instant they spawn (measured at
+   *  0.0 s across 139 of them), so a parachute can never appear on one. */
   falling: boolean
+  /** Somebody has taken something out of it by now. Plenty of crates land
+   *  where nobody goes, so `false` is a real and common outcome. */
+  looted: boolean
+  /** Contents, as dictionary indices, already aggregated per item. */
+  items: readonly number[]
+  /** Quantities parallel to `items` — three 30-round stacks arrive as 90. */
+  qty: readonly number[]
   /** The red box — the one worth crossing open ground for. 500 of the corpus
    *  landings. False on a pre-v12 bundle, where rarity was not carried. */
   rare: boolean
@@ -173,10 +184,18 @@ export function markersAt(
       // apart. Drawn as one square from `t`, a crate appeared on the map half
       // a minute before it existed.
       const land = typeof e.land === 'number' ? e.land : e.t
+      const loot = typeof e.loot === 'number' ? e.loot : null
+      const items = (e.items as number[] | undefined) ?? []
       crates.push({
         x: e.x as number,
         y: e.y as number,
         falling: tick < land,
+        looted: loot !== null && tick >= loot,
+        items,
+        // Absent on a pre-v13 bundle, where stack counts were dropped
+        // entirely. Defaulting to 1 is the honest reading of "unknown": it
+        // matches what those bundles actually said.
+        qty: (e.qty as number[] | undefined) ?? items.map(() => 1),
         rare: e.rare === true,
       })
     } else if (e.k === 'leave') {

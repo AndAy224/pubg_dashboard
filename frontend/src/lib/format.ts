@@ -157,12 +157,36 @@ const ATTACH_CATEGORY = /^(Muzzle|Magazine|Stock|Lower|Upper|SideRail)_/
  * ~11% of live ids are absent from it, so an unknown id must render as itself
  * rather than blank the row.
  */
-export function itemName(raw: string | null | undefined): string {
+/** `Item_Head_…` -> Helmet, and so on. Only these three carry a tier. */
+const ARMOUR_PIECE: Record<string, string> = {
+  Head: 'Helmet',
+  Armor: 'Vest',
+  Back: 'Backpack',
+}
+
+export function itemName(
+  raw: string | null | undefined,
+  opts?: {
+    /**
+     * Name the armour piece as well as its tier.
+     *
+     * Off by default because the inventory panel prints the slot beside the
+     * item, so "Helmet: Lv3 Helmet" is silly. **On wherever there is no slot
+     * label** — in a care package the three armour pieces otherwise render as
+     * "Lv3", "Lv3", "Lv3", which says nothing at all about what is in the box.
+     */
+    withPiece?: boolean
+  },
+): string {
   if (!raw) return '—'
   let s = raw.replace(/_C$/, '').replace(/^Item_/, '')
 
   const tier = /_Lv(\d)$/.exec(s)
-  if (tier && /^(Head|Armor|Back)_/.test(s)) return `Lv${tier[1]}`
+  const piece = /^(Head|Armor|Back)_/.exec(s)
+  if (tier && piece) {
+    const label = `Lv${tier[1]}`
+    return opts?.withPiece ? `${label} ${ARMOUR_PIECE[piece[1]!]}` : label
+  }
 
   s = s
     .replace(/^Attach_Weapon_/, '')
@@ -171,9 +195,16 @@ export function itemName(raw: string | null | undefined): string {
     .replace(/^(Ammo|Heal|Boost|Attach)_/, '')
     .replace(ATTACH_CATEGORY, '')
 
-  return s
-    .replace(/_/g, ' ')
-    // CamelCase to words, so "MuzzleBrake" reads as "Muzzle Brake".
-    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
-    .trim()
+  return (
+    s
+      .replace(/_/g, ' ')
+      // CamelCase to words, so "MuzzleBrake" reads as "Muzzle Brake".
+      .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+      // Calibres. PUBG's ids drop the decimal point — `Item_Ammo_556mm_C` —
+      // and "556mm" reads as a number rather than as a cartridge. The
+      // three-digit ones are all x.yz; 300 Magnum and 12 Guage are not
+      // calibres in millimetres and are left alone.
+      .replace(/\b(\d)(\d\d)mm\b/g, '$1.$2mm')
+      .trim()
+  )
 }

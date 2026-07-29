@@ -141,7 +141,30 @@ BUNDLE_VERSION: Final = 1
 #:      fourth. Crates carry `rare` (the red box, 500 of the corpus landings)
 #:      and phase events carry `inCircle`, the exact white-circle roster that
 #:      `strategy_metrics.rotate_lag_s` approximates with a heuristic.
-PARSER_VERSION: Final = 12
+#: 13 — care-package contents carry **quantities**. `cp.items` was a list of
+#:      item ids with `stackCount` thrown away, so a red box holding three
+#:      30-round stacks of 7.62mm reached the client as three entries — which
+#:      renders as "7.62mm x3", a believable number and the wrong one by a
+#:      factor of thirty. Measured: ammo stacks are 10-90, boosts and smokes
+#:      come in twos, and a crate holds a median of 6 entries.
+#:
+#:      Emitted as a parallel `qty` array beside `items`, already aggregated
+#:      per item id — three stacks of 30 arrive as one entry of 90, which is
+#:      what anyone asking "what is in the crate" means. A pre-v13 bundle has
+#:      no `qty`; the client defaults it to 1.
+#: 14 — crates say whether anyone looted them. `LogItemPickupFromCarepackage`
+#:      fires ~31 times a match, so "has this crate been opened" is answerable
+#:      — but **there is no id to join on**: the pickup carries a
+#:      `carePackageUniqueId` that `LogCarePackageLand` does not, and which is
+#:      a per-match sequence (0-4) meaning nothing by itself.
+#:
+#:      Joined on position *and* package name, and both are needed. The looter
+#:      is within 286 cm of the crate in the worst of 269 measured pickups
+#:      (median 132) — but two crates can land **0 cm apart**, so proximity
+#:      alone is ambiguous; the nearest crate's `itemPackageId` matched the
+#:      pickup's `carePackageName` in 269 of 269. Emitted as `loot` on the `cp`
+#:      event; absent means nobody ever opened it, which is common and real.
+PARSER_VERSION: Final = 14
 
 DEFAULT_TICK_MS: Final = 100
 FALLBACK_TICK_MS: Final = 1000
