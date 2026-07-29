@@ -575,3 +575,53 @@ export interface SessionRow {
   /** Placement of each match, newest first. */
   places: number[]
 }
+
+// ---------------------------------------------------------------------------
+// drops
+// ---------------------------------------------------------------------------
+
+/** One squad's landing in one match.
+ *
+ *  Keyed on **(match, team)**, never on participant: the tracked players are
+ *  always on the same roster together, so a per-participant row would count one
+ *  squad landing up to three times. */
+export interface DropRow {
+  matchId: string
+  playedAt: string
+  mapName: string
+  gameMode: string
+  teamId: number
+  /** Team centroid, centimetres. */
+  x: number
+  y: number
+  /** Furthest landing from that centroid — a split drop stays visible instead
+   *  of being averaged into a point nobody landed on. */
+  spreadCm: number
+  landedAtS: number | null
+  winPlace: number
+  kills: number
+  timeSurvived: number
+  /** Off-team players landing within 200 m and 60 s. Null when the match has no
+   *  strategy row (parsed before v7), which is not the same as zero. */
+  contested: number | null
+  firstWeaponS: number | null
+  names: string[]
+}
+
+export interface PlaceCell {
+  gx: number
+  gy: number
+  name: string
+  support: number
+}
+
+/** PUBG's own place names, binned to the same 256-grid as the heatmaps. */
+export interface Gazetteer {
+  mapName: string
+  grid: number
+  worldSize: number
+  cells: PlaceCell[]
+  matches: number
+  samples: number
+  modalPurity: number
+}

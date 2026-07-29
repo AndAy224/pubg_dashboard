@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { weaponName } from './format'
+import { weaponName, placeName } from './format'
 
 /**
  * `weaponName` against **every** damage causer in the archive.
@@ -117,5 +117,25 @@ describe('weaponName over the whole archive', () => {
       ).json()) as { weapon: string | null }[]
       for (const k of kills) expect(weaponName(k.weapon), `${matchId} ${k.weapon}`).not.toBe('')
     }
+  })
+})
+
+describe('place names in the live gazetteer', () => {
+  it('every name PUBG serves has a display form', async () => {
+    // Same guard as the damage-causer check above, and for the same reason:
+    // an unseen zone id would otherwise reach the drop table as a raw
+    // lowercase blob like `sosnovkamilitarybase`. The fallback title-cases, so
+    // this failing is cosmetic rather than broken — but it is exactly the sort
+    // of drift worth being told about.
+    const r = await fetch(`${BASE}/api/maps/Baltic_Main/places`)
+    if (!r.ok) return // no gazetteer built for this map
+    const gaz = (await r.json()) as { cells: { name: string }[] }
+    const names = [...new Set(gaz.cells.map((c) => c.name))]
+    expect(names.length).toBeGreaterThan(0)
+    const unmapped = names.filter((n) => placeName(n) === n.charAt(0).toUpperCase() + n.slice(1))
+    // A single-word name like `pochinki` legitimately title-cases to itself,
+    // so only flag multi-word-looking ids that fell through.
+    const suspicious = unmapped.filter((n) => n.length > 12)
+    expect(suspicious, `zone ids with no display form: ${suspicious.join(', ')}`).toEqual([])
   })
 })

@@ -1,0 +1,98 @@
+/* A shared component, not a page, so these class names are global by design —
+ * the same status as KillMap.css and HeatmapCanvas. They are prefixed `drop-`
+ * for exactly that reason: `src/styles/css-scope.test.ts` also enforces that no
+ * class is declared by two stylesheets, and generic names are what collided
+ * last time (`.feed-row`, in Replay.css and MatchFeed.css). */
+
+/* 100%, not the `size` attribute: the viewBox maps drop coordinates into the
+   rendered box, so the overlay scales with the wrapper on a narrow screen
+   without any of the geometry needing to know. */
+.dropmap-svg {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  width: 100%;
+  height: 100%;
+}
+
+.drop-marker {
+  cursor: pointer;
+}
+
+.drop-marker circle {
+  fill-opacity: 0.5;
+  stroke: #0d0f0a;
+  stroke-width: 1.5;
+  transition: fill-opacity 0.12s;
+}
+
+/* Three placement bands, matching `placeClass`. Deliberately not a gradient:
+   with 1-25 drops per spot the median is not precise enough to justify one,
+   and a continuous ramp invites reading a two-place difference as real. */
+.drop-marker.good circle {
+  fill: var(--good);
+}
+.drop-marker.mid circle {
+  fill: var(--accent);
+}
+.drop-marker.poor circle {
+  fill: var(--bad);
+}
+.drop-marker.unplaced circle {
+  fill: var(--bot);
+}
+
+.drop-marker.active circle,
+.drop-marker:hover circle {
+  fill-opacity: 0.9;
+  stroke: #fff;
+}
+
+.drop-n {
+  fill: #0d0f0a;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  text-anchor: middle;
+  pointer-events: none;
+}
+
+.drop-label {
+  fill: var(--text);
+  font-family: var(--display);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-anchor: middle;
+  text-transform: uppercase;
+  pointer-events: none;
+  paint-order: stroke;
+  stroke: #0d0f0a;
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+
+.drop-legend {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.drop-sw {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: 5px;
+  vertical-align: -1px;
+}
+.drop-sw.good {
+  background: var(--good);
+}
+.drop-sw.mid {
+  background: var(--accent);
+}
+.drop-sw.poor {
+  background: var(--bad);
+}

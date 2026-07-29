@@ -111,7 +111,9 @@ before fixing anything.
 Operator CLI (`pubgd`): `seed`, `poll`, `worker`, `import-archive`, `stats`,
 `player`, `jobs`. Scripts: `scripts/panic_archive.py` (archive before the 14-day
 window closes, idempotent), `scripts/extract_schema.py` (regenerate the observed
-schema, ~3 min), `scripts/fetch_map_assets.py` (download + tile maps).
+schema, ~3 min), `scripts/fetch_map_assets.py` (download + tile maps),
+`scripts/build_gazetteer.py` (rebuild the committed place-name artifacts from
+the corpus; run it after a new map enters `data/telemetry`).
 
 `fetch_map_assets.py` asks the **running API** which maps have been played, not
 `data/matches/`, which is a raw-payload archive that lags the database. It
@@ -308,6 +310,16 @@ Full list: BUILD-SPEC §6 (34 of them) and HANDOFF §5. The ones that bite most:
 - **`y` is not inverted** (origin top-left, like canvas), and the
   `8160/8192` correction applies **only** to 816000-cm maps. Both verified
   against the map's own printed town names.
+- **PUBG ships its own place names, in `Character.zone`.** This file used to
+  say no place-name data existed. It does: `["pochinki"]`,
+  `["sosnovkamilitarybase"]`, on 32% of position events and 62% of pickups, 26
+  names on Erangel. But **`LogParachuteLanding` carries a zone only 1.2% of the
+  time** — the one event that says where someone dropped is the one that will
+  not name the place. Hence `scripts/build_gazetteer.py`: harvest names from
+  the events that do carry them, bin onto the 256² heatmap grid, look up
+  afterwards. Measured purity 0.9847 over 1.3M samples; **8.8% of the grid is
+  named**, so "no name near here" is the common and correct answer. Exclude
+  `8thEventSpot` — an event marker, never appears alone.
 - **`distance = -1` is a "not applicable" sentinel**, 8.6% of kills. Filter
   `> 0` in any "longest kill" query.
 - **`asset.attributes.URL` is uppercase.** It gates the entire replay feature.

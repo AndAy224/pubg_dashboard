@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { distance, duration, gameMode, itemName, num, placement, weaponName } from './format'
+import { distance, duration, gameMode, itemName, num, placement, weaponName, placeName } from './format'
 
 describe('duration', () => {
   it('formats minutes and seconds, and hours past an hour', () => {
@@ -224,5 +224,30 @@ describe('itemName', () => {
     expect(itemName('totally-unknown')).toBe('totally-unknown')
     expect(itemName(null)).toBe('—')
     expect(itemName('')).toBe('—')
+  })
+})
+
+describe('placeName', () => {
+  it('expands PUBG unspaced zone ids', () => {
+    expect(placeName('sosnovkamilitarybase')).toBe('Sosnovka Military Base')
+    expect(placeName('yasnayapolyana')).toBe('Yasnaya Polyana')
+    expect(placeName('myltapower')).toBe('Mylta Power')
+  })
+
+  it('title-cases an unknown id rather than blanking it', () => {
+    // Every PUBG enum is open and new maps bring new locations. A miss must
+    // still read as a place, not as an empty cell.
+    expect(placeName('somenewtown')).toBe('Somenewtown')
+  })
+
+  it('never returns an empty string', () => {
+    expect(placeName(null)).toBe('unnamed')
+    expect(placeName(undefined)).toBe('unnamed')
+    expect(placeName('')).toBe('unnamed')
+  })
+
+  it('is case-insensitive on the wire value', () => {
+    expect(placeName('Pochinki')).toBe('Pochinki')
+    expect(placeName('POCHINKI')).toBe('Pochinki')
   })
 })

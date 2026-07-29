@@ -1800,3 +1800,125 @@ probed in a real browser against the deployed `dist/`.
 Numbers on the live page match the independent measurements exactly: 83
 official matches, 195 deaths, 44 third-partied, 122/200 and 112/182 knocks,
 first-down 32/71, 28/71, 11/38.
+
+---
+
+## 30. Where we drop — added 2026-07-29
+
+**What**: a "Where we drop" section on `/strategy` — an Erangel map with one
+marker per drop spot, sized by how often the squad lands there and coloured by
+median placement, over a table with each spot's record. Clicking either the
+marker or the row opens the individual drops, each linking into the replay at
+the moment they landed.
+
+**No migration, no `PARSER_VERSION` bump, no reparse.** `participants.landing_x/y`
+and `landed_at_s` have been populated since parser v7 and nothing had ever
+joined them to an outcome.
+
+### 30.1 PUBG ships the place names, and this repo did not know
+
+CLAUDE.md and the plan for this work both said there was no place-name data and
+that drop spots would have to be anonymous pins. That was wrong. **Every
+`Character` block carries a `zone` list** — `["pochinki"]`,
+`["sosnovkamilitarybase"]` — on 32% of position events, 48% of damage events and
+62% of item pickups. 26 distinct names on Erangel.
+
+The catch, and the reason `scripts/build_gazetteer.py` exists rather than a
+lookup at read time: **`LogParachuteLanding` carries a zone only 1.2% of the
+time.** The one event that says where a player dropped is the one event that
+almost never names the place. So the names are harvested from the events that
+do carry them, binned onto the same 256² grid `heatmap_bins` uses, and looked up
+afterwards.
+
+Measured on 61 Erangel matches: 1,325,503 samples, **modal purity 0.9847**,
+5,746 named cells — **8.8% of the grid**. Most of Erangel is fields, and a
+gazetteer that named most of the map would confidently mislabel every drop.
+
+Exactly two multi-zone combinations occur: `rozhok`+`school`, and
+`8thEventSpot`+`ferrypier`. **`8thEventSpot` is excluded** — it is a
+limited-time event marker, occurs 50 times, and never appears alone.
+
+### 30.2 Why an artifact and not a table
+
+`backend/pubg_dashboard/telemetry/places/baltic_main.json` is committed, with the
+same standing as `docs/reference/telemetry-observed-schema.md`.
+
+A `map_places` table filled at parse time would be a global aggregate over
+matches **with no ledger** — precisely the failure mode `heatmap_bins` needed
+the heat ledger to survive. A reparse would double every cell's support and the
+modal name would still look right, so nothing would ever surface it. Building
+it offline makes that error impossible.
+
+### 30.3 The check that proves the names are on the right ground
+
+Centroids were compared against **the map image's own printed labels** — the
+same method that settled the y-inversion question. Cropping
+`assets/.source/Erangel_Main_High_Res.png` at each centroid: Prison, Mansion,
+Shelter, Rozhok, Boatyard, Ruins, School and Pochinki all sit exactly where the
+gazetteer puts them.
+
+Worth recording that **Prison came out at (6245, 3753), east-central, and that
+looked wrong** — recollection said south-west. The map says east-central. The
+crop settled it in ten seconds; the recollection would have "fixed" a correct
+transform.
+
+`tests/test_gazetteer.py` pins ten of those coordinates, plus a test asserting a
+**transposed** lookup disagrees — otherwise the coordinate test would pass under
+an x/y swap and guard nothing.
+
+### 30.4 Clustering has to be order-independent
+
+The obvious implementation — walk the drops, attach each to the first cluster
+within a radius, else start a new one — gives a different partition depending on
+arrival order. The API returns newest-first, so **one match played tonight could
+re-partition every spot and silently change every number on the page.**
+
+Ships as snap-to-400 m-grid, then union-find over occupied cells including
+diagonals, then centroid. The grid does not move, so the partition is a function
+of the points alone. `drops.test.ts` asserts forward, reversed and shuffled
+inputs agree.
+
+The diagonal merge is not decoration: the first measurement of this data
+reported Sosnovka Military Base **twice** — n=19 averaging place 25.7 and n=6
+averaging 11.8 — purely because a grid line ran through it. Two halves of one
+spot, with wildly different apparent records.
+
+### 30.5 What it says
+
+83 Erangel squad drops over **13 spots**, top five covering 73 of them:
+
+| spot | drops | median | contested | 1st weapon |
+|---|---:|---:|---:|---:|
+| Sosnovka Military Base | 25 | #15 | 72% | 7.2 s |
+| Lipovka | 18 | #14 | 72% | 7.2 s |
+| School | 15 | #24 | **93%** | 5.6 s |
+| Georgopol | 8 | #15 | 50% | 6.6 s |
+| Primorsk | 7 | **#36** | 100% | 7.8 s |
+
+The table is sorted by **drops, not by placement**. Ranking by outcome on
+single-digit samples reads as a recommendation the data cannot support, and
+CLAUDE.md's dominant failure mode is plausible wrong output. Every rate carries
+its denominator (`72% /25` versus `100% /1`).
+
+### 30.6 Honest edges
+
+* **Open country is a real answer.** A spot with no named cell within 150 m
+  renders as "unnamed — 434 m NE of Sosnovka Military Base", never as the
+  nearest town's name and never blank. Three of the 13 spots are unnamed.
+* **Three states, not two.** `named`, `unnamed` (this map has names, none is
+  near) and `unknown` (no gazetteer built for this map at all). The last is a
+  missing artifact fixed by running a script; merging it with "open country"
+  would hide that.
+* `GET /api/maps/{map}/places` 404s with a message naming the real cause and
+  listing what has been built, rather than "not found".
+* `placeName()` in `lib/format.ts` maps PUBG's unspaced ids to printed names
+  and **title-cases anything unknown** — every PUBG enum is open, so a new
+  map's locations must still render as places.
+
+### Verified
+
+Backend `ruff` clean. Frontend `npm run check` green — 193 tests across 14
+files, 30 new across `drops.test.ts`, `drops.corpus.test.ts` and
+`test_gazetteer.py`'s 24. Built, then driven in a real browser: 13 rows render,
+clicking a marker selects its row, and the row opens 25 replay links at the
+landing timestamps.

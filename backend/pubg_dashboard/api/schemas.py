@@ -714,3 +714,66 @@ class SessionRow(ApiModel):
     damage: float
     #: Placement of each match, newest first — the session's shape at a glance.
     places: list[int]
+
+
+# ---------------------------------------------------------------------------
+# drops — where we land, joined to how it went
+# ---------------------------------------------------------------------------
+class DropRow(ApiModel):
+    """One squad's landing in one match.
+
+    Keyed on **(match, team)**, never on participant. The three tracked players
+    are always on the same roster when they play together, so a per-participant
+    row would count one team drop up to three times and turn n = 19 into a
+    confident n = 48.
+    """
+
+    match_id: str
+    played_at: dt.datetime
+    map_name: str
+    game_mode: str
+    team_id: int
+    #: Team centroid, centimetres. The individual landings are averaged, and
+    #: `spread_cm` says how far apart they were — a split drop stays visible
+    #: instead of being averaged into a point nobody landed on.
+    x: float
+    y: float
+    spread_cm: float
+    landed_at_s: float | None
+    #: The roster's placement. Shared, so it is one value per row.
+    win_place: int
+    #: Summed over the tracked players on the roster, human victims only.
+    kills: int
+    #: Best (longest) survival among them, seconds.
+    time_survived: float
+    #: Off-team players who landed within 200 m and 60 s — the maximum over the
+    #: squad, since a drop is contested if anyone lands on top of any of them.
+    contested: int | None
+    #: Seconds from landing to first weapon equipped, averaged over the squad.
+    first_weapon_s: float | None
+    names: list[str]
+
+
+class PlaceCell(ApiModel):
+    gx: int
+    gy: int
+    name: str
+    support: int
+
+
+class Gazetteer(ApiModel):
+    """PUBG's own place names, binned to the heatmap grid.
+
+    Built offline by `scripts/build_gazetteer.py` and committed, because the
+    one event that says where a player dropped — `LogParachuteLanding` —
+    carries a zone name only ~1.2% of the time.
+    """
+
+    map_name: str
+    grid: int
+    world_size: int
+    cells: list[PlaceCell]
+    #: Provenance, so the client can say what the names were derived from.
+    matches: int
+    samples: int
+    modal_purity: float

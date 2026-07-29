@@ -3,6 +3,7 @@ import { useQueries, useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router'
 import { get } from '../api/client'
 import type {
+  MapInfo,
   PlayerCard,
   SquadMatchRow,
   StrategyBaseline,
@@ -13,6 +14,7 @@ import { Place, Skeleton } from '../components/ui'
 import { dateTime, distance, duration, gameMode, num, weaponName } from '../lib/format'
 import { contrastByPlacement, mergeWeapons, type Contrast } from '../lib/strategy'
 import { playerColourHex, registerPlayers } from '../lib/players'
+import { StrategyDrops } from './StrategyDrops'
 import './Strategy.css'
 
 /** The "everyone together" selection. Not an account id, so it cannot collide. */
@@ -194,6 +196,12 @@ export function Strategy() {
     staleTime: 5 * 60_000,
   })
 
+  const maps = useQuery({
+    queryKey: ['maps', 'played'],
+    queryFn: () => get<MapInfo[]>('/maps/played'),
+    staleTime: 60 * 60_000,
+  })
+
   const combined = selected === COMBINED
   const loading =
     players.isPending || ids.length === 0 || rowQueries.some((q) => q.isPending)
@@ -274,6 +282,8 @@ export function Strategy() {
           ))}
         </div>
       )}
+
+      <StrategyDrops maps={maps.data} />
 
       <div className="split">
         <section className="card">

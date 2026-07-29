@@ -58,3 +58,69 @@
   margin-right: 6px;
   vertical-align: 0;
 }
+
+/* --- drops --------------------------------------------------------------- */
+/* Scoped under .strategy like everything else here. The marker styling itself
+ * lives in components/DropMap.css, because the map is a shared component and
+ * the replay/heatmap pages may want it later. */
+
+.strategy .drops .note {
+  font-size: 12px;
+  max-width: 78ch;
+  line-height: 1.5;
+  margin-bottom: 10px;
+}
+
+.strategy .drops-table {
+  margin-top: 12px;
+}
+
+.strategy .drop-row {
+  cursor: pointer;
+}
+
+.strategy .drop-row.open td {
+  background: var(--bg-hover);
+}
+
+.strategy .drop-row .drop-sw {
+  margin-right: 7px;
+}
+
+.strategy .drop-row .tag {
+  margin-left: 8px;
+}
+
+.strategy .drop-detail td {
+  background: var(--bg-inset);
+}
+
+.strategy .drop-detail-inner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.strategy .drop-detail-inner a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.strategy .drop-detail-inner a:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+}
+
+/* Eight columns; let the table scroll inside its card rather than pushing the
+   page body sideways. */
+@media (max-width: 1000px) {
+  .strategy .drops {
+    overflow-x: auto;
+  }
+}

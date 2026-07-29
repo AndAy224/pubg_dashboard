@@ -208,3 +208,52 @@ export function itemName(
       .trim()
   )
 }
+
+/**
+ * PUBG's zone ids, as printed on the map.
+ *
+ * `Character.zone` ships lowercase and unspaced — `sosnovkamilitarybase` — and
+ * that is what the gazetteer stores, because it is the wire value and joins
+ * cleanly. This is presentation only.
+ *
+ * **Open list, by rule.** Every PUBG enum is open and PUBG adds locations with
+ * new maps, so a miss falls back to title-casing rather than blanking the
+ * label or throwing. `placeName('novoplace')` gives 'Novoplace', which reads
+ * as a place even though nobody has typed it here.
+ */
+const PLACE_NAMES = new Map<string, string>([
+  // Erangel, all 26 observed in the corpus.
+  ['sosnovkamilitarybase', 'Sosnovka Military Base'],
+  ['yasnayapolyana', 'Yasnaya Polyana'],
+  ['myltapower', 'Mylta Power'],
+  ['novorepnoye', 'Novorepnoye'],
+  ['ferrypier', 'Ferry Pier'],
+  ['shootingrange', 'Shooting Range'],
+  ['georgopol', 'Georgopol'],
+  ['pochinki', 'Pochinki'],
+  ['primorsk', 'Primorsk'],
+  ['severny', 'Severny'],
+  ['kameshki', 'Kameshki'],
+  ['lipovka', 'Lipovka'],
+  ['rozhok', 'Rozhok'],
+  ['stalber', 'Stalber'],
+  ['zharki', 'Zharki'],
+  ['boatyard', 'Boatyard'],
+  ['hospital', 'Hospital'],
+  ['mansion', 'Mansion'],
+  ['quarry', 'Quarry'],
+  ['school', 'School'],
+  ['shelter', 'Shelter'],
+  ['prison', 'Prison'],
+  ['ruins', 'Ruins'],
+  ['gatka', 'Gatka'],
+  ['mylta', 'Mylta'],
+  ['farm', 'Farm'],
+])
+
+export function placeName(raw: string | null | undefined): string {
+  if (!raw) return 'unnamed'
+  const known = PLACE_NAMES.get(raw.toLowerCase())
+  if (known !== undefined) return known
+  return raw.charAt(0).toUpperCase() + raw.slice(1)
+}
