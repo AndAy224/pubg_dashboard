@@ -474,8 +474,6 @@ class KillEvent(Base):
     #: call `death_type = 'byzone'` got at 3.1%. Recorded because it is one bit
     #: off a sample already loaded, and reported as a footnote count.
     victim_in_vehicle: Mapped[bool | None] = mapped_column(Boolean)
-    #: 3.2% of deaths. Shot out of the sky, or landed straight into a fight.
-    victim_parachuting: Mapped[bool | None] = mapped_column(Boolean)
     #: Staleness of the victim's own sample. Median **1 ms**, p90 32 ms —
     #: `LogPlayerKillV2` carries the victim's `Character` block, so unlike a
     #: zone phase a death lands exactly on a sample. Kept because the number

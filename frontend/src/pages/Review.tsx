@@ -324,9 +324,9 @@ function EveryDeath({
       </table>
 
       <p className="faint note">
-        Footnotes, all too thin to be categories: {data.inVehicle} deaths in a
-        vehicle, {data.parachuting} still in the air, {data.outsideAnyFight}{' '}
-        with no attributable exchange behind them.
+        Footnotes, both too thin to be categories: {data.inVehicle} deaths in a
+        vehicle, {data.outsideAnyFight} with no attributable exchange behind
+        them.
       </p>
     </section>
   )

@@ -1008,7 +1008,6 @@ class DeathListRow(ApiModel):
     #: METRES to the nearest **living** teammate. None when `alone`.
     nearest_teammate_m: float | None
     in_vehicle: bool | None
-    parachuting: bool | None
     #: Inside the last circle to close before this death. None when no phase
     #: had closed yet — 36% of deaths, and a different answer from False.
     in_circle: bool | None
@@ -1048,10 +1047,14 @@ class SquadDeaths(ApiModel):
     knocked_first: Rate
     circle: CircleComparison
 
-    #: Footnote counts, not categories — both measured near 1-3%, the same
-    #: call `zone_deaths` got.
+    #: A footnote count, not a category — measured at 1.0%, the same call
+    #: `zone_deaths` got at 3.1%.
+    #:
+    #: There is no `parachuting` beside it. v17 had one, from a flag that means
+    #: "the match is in its plane phase" rather than "this player is airborne",
+    #: and it marked 42 already-landed deaths out of 62. Measured against each
+    #: player's own landing event, one death in 1,918 qualified.
     in_vehicle: int
-    parachuting: int
     #: Deaths that attached to no exchange at all.
     outside_any_fight: int
 

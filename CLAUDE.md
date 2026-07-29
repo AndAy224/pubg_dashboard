@@ -317,6 +317,19 @@ Full list: BUILD-SPEC §6 (34 of them) and HANDOFF §5. The ones that bite most:
 - **`LogHeal` is the third most common event in a match** (~4,000 of 37,000)
   and is the only signal for health going *up*. It fires per heal tick, mostly
   +1, so it is thinned on health delta — see `HEAL_MIN_DELTA`.
+- **`FLAG_PARACHUTING` means "the match is in its plane phase", not "this
+  player is under a canopy."** It is set from `common.isGame`, which is a
+  property of the *match*, so it is true for the whole lobby at once and stays
+  true for anyone who dropped early and is already looting or fighting. The
+  name reads as a per-player state and is not one. A death review shipped
+  "still in the air" off it and marked 4-metre firefights with 96 damage dealt:
+  measured, 62 deaths carried the flag and **42 had already landed**. Against
+  each victim's own `LogParachuteLanding` — the exact, per-player signal —
+  exactly **one death in 1,918** was airborne, and that was a flare-gun
+  redeploy at 364 s. The column was dropped in v19 rather than corrected.
+  `strategy.py`'s use of the flag is right, and shows which question it
+  answers: it excludes plane-phase samples from teammate spread, where the
+  match phase genuinely is the question (everyone is inside one aircraft).
 - **`character.isInVehicle` includes the match-start aircraft**, so it is true
   for the *entire lobby* for the first ~90 s, and 43% of in-vehicle samples are
   aircraft, pickup balloons or a mounted mortar. Draw vehicle markers from

@@ -37,7 +37,6 @@ from typing import Any
 from pubg_dashboard.telemetry.combat import CombatTracker
 from pubg_dashboard.telemetry.frames import (
     FLAG_IN_VEHICLE,
-    FLAG_PARACHUTING,
     FrameIndex,
     Sample,
 )
@@ -130,7 +129,15 @@ def compute_death_context(
             #: one bit off a sample already loaded, so it is recorded and
             #: footnoted rather than turned into a bucket.
             "victim_in_vehicle": bool(sample.flags & FLAG_IN_VEHICLE),
-            "victim_parachuting": bool(sample.flags & FLAG_PARACHUTING),
+            #: There is no `victim_parachuting`, and its absence is deliberate.
+            #: v17 recorded one from `FLAG_PARACHUTING`, which means **the
+            #: match is in its plane phase** rather than "this player is under
+            #: a canopy" — so it was set for anyone who dropped early and was
+            #: already fighting. 42 of the 62 deaths it marked had landed.
+            #: Measured properly, against each player's own
+            #: `LogParachuteLanding`, exactly **one death in 1,918** was
+            #: airborne, and that one was a flare-gun redeploy at 364 s. Far
+            #: below the bar that made "in a vehicle" a footnote at 1.0%.
             "victim_sample_lag_ms": lag,
         }
     return out

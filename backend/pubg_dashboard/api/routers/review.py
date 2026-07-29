@@ -775,8 +775,8 @@ async def squad_deaths(
 
     # Labelled, and read back through `.mappings()`. An earlier draft indexed
     # the tuple positionally and inserting one column silently shifted
-    # `in_vehicle` onto `parachuting` — every value still the right *type*, so
-    # nothing raised and the page rendered a plausible list.
+    # `in_vehicle` onto the column beside it — every value still the right
+    # *type*, so nothing raised and the page rendered a plausible list.
     stmt = (
         select(
             ours.c.match_id.label("match_id"),
@@ -795,7 +795,6 @@ async def squad_deaths(
             ours.c.victim_nearest_teammate_cm.label("nearest_cm"),
             ours.c.victim_teammates_alive.label("teammates_alive"),
             ours.c.victim_in_vehicle.label("in_vehicle"),
-            ours.c.victim_parachuting.label("parachuting"),
             last_circle.label("in_circle"),
             fight.c.third_party_team_id.label("third_party_team_id"),
             fight.c.seq.label("fight_seq"),
@@ -871,7 +870,6 @@ async def squad_deaths(
             baseline=_rate(int(baseline[0] or 0), int(baseline[1] or 0)),
         ),
         in_vehicle=sum(1 for r in all_rows if r["in_vehicle"] is True),
-        parachuting=sum(1 for r in all_rows if r["parachuting"] is True),
         outside_any_fight=sum(1 for r in all_rows if r["fight_seq"] is None),
         rows=rows,
     )
@@ -904,7 +902,6 @@ def _death_row(r: Any) -> DeathListRow:
         alone=None if alive is None else alive == 0,
         nearest_teammate_m=(float(nearest) / 100.0 if nearest is not None else None),
         in_vehicle=r["in_vehicle"],
-        parachuting=r["parachuting"],
         in_circle=r["in_circle"],
         damage_dealt=(
             float(r["damage_dealt"]) if r["damage_dealt"] is not None else None

@@ -41,7 +41,6 @@ function row(over: Partial<DeathListRow> = {}): DeathListRow {
     alone: false,
     nearestTeammateM: 42,
     inVehicle: false,
-    parachuting: false,
     inCircle: true,
     damageDealt: 30,
     damageTaken: 100,
@@ -59,7 +58,6 @@ function payload(over: Partial<SquadDeaths> = {}): SquadDeaths {
     knockedFirst: rate(112, 195),
     circle: { atDeath: rate(76, 124), baseline: rate(240, 432) },
     inVehicle: 2,
-    parachuting: 6,
     outsideAnyFight: 9,
     rows: [row()],
     ...over,
@@ -120,10 +118,19 @@ describe('tags', () => {
     expect(tagsFor(row({ alone: true, nearestTeammateM: null }))).toContain('last one up')
   })
 
-  it('does not claim a vehicle or a parachute on a null', () => {
-    const tags = tagsFor(row({ inVehicle: null, parachuting: null }))
-    expect(tags).not.toContain('in a vehicle')
-    expect(tags).not.toContain('still in the air')
+  it('does not claim a vehicle on a null', () => {
+    expect(tagsFor(row({ inVehicle: null }))).not.toContain('in a vehicle')
+  })
+
+  it('never claims a death happened in the air', () => {
+    // Removed in v19. The tag came from a flag meaning "the match is in its
+    // plane phase", not "this player is under a canopy", so it marked 42
+    // already-landed deaths out of 62 — 4-metre firefights with 96 damage
+    // dealt, labelled as parachute deaths. One death in 1,918 is genuinely
+    // airborne. Pinned so nothing reintroduces it from the same flag.
+    for (const r of [row(), row({ inVehicle: true }), row({ alone: true })]) {
+      expect(tagsFor(r).join(' ')).not.toMatch(/air|parachut|sky/i)
+    }
   })
 
   it('reports distance from the squad only past the radius', () => {

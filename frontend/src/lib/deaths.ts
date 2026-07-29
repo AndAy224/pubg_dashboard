@@ -87,7 +87,10 @@ export function tagsFor(row: DeathListRow): string[] {
   else if (row.nearestTeammateM !== null && row.nearestTeammateM > 100) {
     out.push(`${Math.round(row.nearestTeammateM)} m from the squad`)
   }
-  if (row.parachuting === true) out.push('still in the air')
+  // There is no "still in the air" tag, and its absence is deliberate. It was
+  // rendered from a flag meaning "the match is in its plane phase", so it
+  // marked 42 already-landed deaths out of 62 — including 4-metre firefights
+  // with 96 damage dealt. One death in 1,918 is genuinely airborne.
   if (row.inVehicle === true) out.push('in a vehicle')
   if (row.killerIsBot === true) out.push('to a bot')
   return out

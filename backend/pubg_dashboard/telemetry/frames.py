@@ -53,6 +53,25 @@ FLAG_DBNO: Final = 1 << 1
 FLAG_IN_VEHICLE: Final = 1 << 2
 FLAG_BLUE_ZONE: Final = 1 << 3
 FLAG_RED_ZONE: Final = 1 << 4
+
+#: **The match is in its plane phase — not "this player is under a canopy".**
+#:
+#: Set from `common.isGame` being the plane-phase value, which is a property of
+#: the *match*, so it is true for every player at once and stays true for
+#: someone who dropped early and is already looting or fighting on the ground.
+#:
+#: The name reads as a per-player state and is not one. Measured over 1,918
+#: deaths: 62 carried this flag and **42 of them had already landed** — and
+#: only **one** death in the whole corpus happened before that player's own
+#: `LogParachuteLanding`. A death review shipped "still in the air" off this
+#: flag and was wrong on two thirds of the rows it marked.
+#:
+#: For "is this player actually airborne", use `landing()` — their own
+#: `LogParachuteLanding` — and expect the answer to be almost never.
+#:
+#: `strategy.py` uses this flag correctly, and the distinction is why: it
+#: excludes plane-phase samples from teammate spread, where the question really
+#: is about the match phase (everyone is bunched inside one aircraft).
 FLAG_PARACHUTING: Final = 1 << 5
 
 #: In a vehicle that is **driven around the map** — a car, boat or glider.

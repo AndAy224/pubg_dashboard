@@ -2714,3 +2714,76 @@ No migration, no reparse. Backend **988 passed, 1 skipped**, `ruff` clean.
 Frontend `npm run check` green — 280 tests across 19 files. Built, then driven
 in a real browser: every page loads with no errors, and the Strategy filter was
 exercised end to end rather than assumed.
+
+---
+
+## 36. "Still in the air" was wrong on two thirds of the rows it marked — parser v19
+
+Found by opening `/review` in a browser and reading it, which is the only
+reason it was found at all: every test passed, the column was populated, and
+the tag rendered on a plausible 3% of deaths.
+
+The tell was in the table itself. Rows tagged **"still in the air"** showed
+4-, 7- and 11-metre fights with 96 and 100 damage dealt. You cannot shoot while
+parachuting.
+
+### 36.1 The flag does not mean what its name says
+
+`FrameIndex`'s `FLAG_PARACHUTING` is set from `common.isGame` being the
+plane-phase value. That is a property of the **match**, not the player: it is
+true for the whole lobby at once, and it stays true for anyone who dropped
+early and is already on the ground looting or fighting.
+
+I read the name and used it. CLAUDE.md's first instruction is not to.
+
+Measured over 1,918 archived deaths:
+
+| | |
+|---|---:|
+| deaths carrying `FLAG_PARACHUTING` | 62 (3.2%) |
+| ...of those, **already landed** | **42 (68%)** |
+| died before their own `LogParachuteLanding` | **1 (0.05%)** |
+
+The one genuine case was at **364 s** — a flare-gun redeploy, exactly the
+mid-match aircraft ride CLAUDE.md already warns about.
+
+### 36.2 Dropped, not corrected
+
+The correct signal exists and is exact: each victim's own
+`LogParachuteLanding`, already indexed as `FrameIndex.landing()`. Rebuilding
+the column on it would have produced a fact that is true on **one row in two
+thousand** — far below the 1.0% that made "died in a vehicle" a footnote count
+rather than a category, and below the 3.1% that did the same to "died in the
+blue".
+
+So `victim_parachuting` is gone (migration 0012, parser v19), along with the
+tag and the footnote. `test_no_parachuting_column_is_written` pins the absence
+and `test_genuinely_airborne_deaths_are_too_rare_to_record` pins the
+measurement that decided it — as a bound, so if PUBG ever makes redeploys
+common the column becomes worth having again, computed the right way.
+
+`FLAG_PARACHUTING` itself stays. `strategy.py` uses it correctly, excluding
+plane-phase samples from teammate spread, where the match phase genuinely is
+the question — everyone is bunched inside one aircraft. Its docstring now says
+which question it answers, and names this bug.
+
+### 36.3 What the page otherwise says
+
+Read in a browser at 85 matches and 196 deaths, everything else checked out:
+
+- The circle comparison renders its conclusion out loud — *"76 of 124 (61%) of
+  your deaths … against 244 of 440 (55%) of every circle you were alive for.
+  The same, so being out of the circle is not what is killing you."*
+- The alone/isolated denominators reconcile on screen: 81 alone + 115 with a
+  teammate up = 196.
+- Three tracked players dying within the same second at 19:14 produce exactly
+  one "last one up" between them — the §33.3 millisecond fix, visible in the
+  table.
+- Damage taken reads 100 on most rows because that is what killing a
+  full-health player costs; the rows at 83, 77 and 69 are the ones where armour
+  or earlier damage changed it.
+
+### Verified
+
+Backend suite green, `ruff` clean, migration 0012 hand-annotated. Frontend
+`npm run check` green — 281 tests across 19 files. Reparsed at v19.

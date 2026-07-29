@@ -189,11 +189,45 @@ def test_dying_in_a_vehicle_is_rare_enough_to_stay_a_footnote(
     assert n / len(rows) < 0.10
 
 
-def test_parachute_deaths_occur_and_are_a_minority(kills: list[dict[str, Any]]) -> None:
-    """Measured 3.2%. Shot out of the sky, or landed straight into a fight."""
-    rows = [k for k in kills if k.get("victim_parachuting") is not None]
-    n = sum(1 for k in rows if k["victim_parachuting"])
-    assert 0 < n < len(rows) * 0.25
+def test_no_parachuting_column_is_written(kills: list[dict[str, Any]]) -> None:
+    """The column v17 added, and v19 removed. Pinned so it stays removed.
+
+    It came from `FLAG_PARACHUTING`, whose name reads as a per-player state and
+    is not one — it is set from `common.isGame` being the plane-phase value,
+    a property of the **match**, true for the whole lobby at once and still
+    true for someone who dropped early and is already fighting.
+
+    Measured over 1,918 deaths: 62 carried the flag and **42 had already
+    landed**. The review page rendered "still in the air" on 4-metre firefights.
+    """
+    assert "victim_parachuting" not in kills[0]
+
+
+def test_genuinely_airborne_deaths_are_too_rare_to_record(parsed: list[Any]) -> None:
+    """One death in 1,918, and that one a flare-gun redeploy at 364 s.
+
+    This is the measurement that decided the column should be dropped rather
+    than corrected, so it is asserted rather than left in a commit message.
+    Against each victim's own `LogParachuteLanding` — exact, per player — an
+    airborne death is a fraction of a percent, far below the 1.0% that made
+    "died in a vehicle" a footnote instead of a category.
+
+    A bound rather than an equality: PUBG could make redeploys common tomorrow,
+    and if this ever fails the column is worth having again, computed this way.
+    """
+    airborne = total = 0
+    for result in parsed:
+        _combat, frames, _teams = _rebuild(result)
+        for row in result.kill_rows:
+            total += 1
+            landing = frames.landing(row["victim_account_id"])
+            # `landing is None` is "never landed at all" — a disconnect or a
+            # plane death — which is a different and equally rare thing. It is
+            # not counted as airborne, because it is not measured.
+            if landing is not None and result.meta.t0_ms + int(row["t_s"] * 1000) < landing[0]:
+                airborne += 1
+    assert total > 300
+    assert airborne / total < 0.01, f"{airborne}/{total} airborne — reconsider the column"
 
 
 def test_a_dead_teammate_is_never_counted_as_present(parsed: list[Any]) -> None:

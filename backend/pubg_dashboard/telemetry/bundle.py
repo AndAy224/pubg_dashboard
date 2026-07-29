@@ -207,7 +207,7 @@ BUNDLE_VERSION: Final = 1
 #:
 #: v17: death review. Five new `kill_events` columns describing the victim's
 #:      context at the instant they died — nearest **living** teammate, how
-#:      many were left, in a vehicle, parachuting, sample lag.
+#:      many were left, in a vehicle, sample lag.
 #:
 #:      Only what SQL cannot already answer. "Third-partied" joins
 #:      `engagements`, "started as a knock" reads `dbno_maker_account_id`,
@@ -229,7 +229,17 @@ BUNDLE_VERSION: Final = 1
 #:      Aliveness now comes from `FrameIndex.death_ms` — exact, unsampled —
 #:      while position still comes from the track. Two questions, and only one
 #:      of them is sampled. **No bundle change.**
-PARSER_VERSION: Final = 18
+#: v19: drops v17's `victim_parachuting`. It came from `FLAG_PARACHUTING`,
+#:      which means **the match is in its plane phase** — a match property,
+#:      true for the whole lobby at once — and not "this player is under a
+#:      canopy". 42 of the 62 deaths it marked had already landed, and the
+#:      review page rendered "still in the air" on every one of them.
+#:
+#:      Measured against each player's own `LogParachuteLanding`, **one death
+#:      in 1,918** was genuinely airborne, and that was a flare-gun redeploy at
+#:      364 s. Below the bar that made "in a vehicle" a footnote at 1.0%, so
+#:      the column is gone rather than corrected. **No bundle change.**
+PARSER_VERSION: Final = 19
 
 DEFAULT_TICK_MS: Final = 100
 FALLBACK_TICK_MS: Final = 1000

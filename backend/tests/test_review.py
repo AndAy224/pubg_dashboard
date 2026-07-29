@@ -786,14 +786,27 @@ async def test_the_fight_behind_a_death_is_the_right_one(
 
 
 async def test_footnote_counts_are_counts_not_rates(deaths: dict) -> None:
-    """Vehicle, parachute and no-fight deaths are too thin for a category.
+    """Vehicle and no-fight deaths are too thin for a category.
 
-    Measured 1.0%, 3.2% and 4.6%. Returned as bare integers so nothing can
-    render them as a headline percentage the way a `Rate` invites.
+    Measured 1.0% and 4.6%. Returned as bare integers so nothing can render
+    them as a headline percentage the way a `Rate` invites.
     """
-    for key in ("inVehicle", "parachuting", "outsideAnyFight"):
+    for key in ("inVehicle", "outsideAnyFight"):
         assert isinstance(deaths[key], int)
         assert 0 <= deaths[key] <= deaths["deaths"]
+
+
+async def test_no_parachuting_field_is_returned(deaths: dict) -> None:
+    """Dropped in v19, and it must not come back from the same flag.
+
+    `FLAG_PARACHUTING` means "the match is in its plane phase", not "this
+    player is airborne" — it marked 42 already-landed deaths out of 62, and
+    the page rendered "still in the air" on 4-metre firefights. Measured
+    against each victim's own landing event, one death in 1,918 qualified.
+    """
+    assert "parachuting" not in deaths
+    for row in deaths["rows"]:
+        assert "parachuting" not in row
 
 
 # ---------------------------------------------------------------------------

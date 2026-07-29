@@ -772,7 +772,6 @@ export interface DeathListRow {
   alone: boolean | null
   nearestTeammateM: number | null
   inVehicle: boolean | null
-  parachuting: boolean | null
   /** Null when no phase had closed yet — 36% of deaths, and a different
    *  answer from false. */
   inCircle: boolean | null
@@ -793,9 +792,8 @@ export interface SquadDeaths {
   thirdPartied: Rate
   knockedFirst: Rate
   circle: CircleComparison
-  /** Footnote counts, not categories — both measured near 1-3%. */
+  /** A footnote count, not a category — measured at 1.0%. */
   inVehicle: number
-  parachuting: number
   outsideAnyFight: number
   rows: DeathListRow[]
 }
