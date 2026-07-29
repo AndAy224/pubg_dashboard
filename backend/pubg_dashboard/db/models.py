@@ -449,6 +449,40 @@ class KillEvent(Base):
         ARRAY(Text), default=list, server_default=text("'{}'")
     )
 
+    # --- the victim's context at the instant they died (parser v17) --------
+    # Derived by `telemetry/deaths.py` from the position track. These live
+    # here rather than in a table of their own because they describe the same
+    # event this row already describes — `victim_x`/`victim_y` are the
+    # precedent — and a 1:1 table on the same primary key would be a join for
+    # nothing.
+    #
+    # **Deliberately only what SQL cannot already answer.** "Was it a
+    # third-party" joins `engagements`, "did it start as a knock" reads
+    # `dbno_maker_account_id`, "were they in the circle" reads `zone_play`.
+    # Copying any of those here would go stale on the next parser version
+    # while the join would not.
+
+    #: CENTIMETRES to the nearest teammate who was **still in the match**.
+    #: NULL means nobody was left to be near — 65% of all deaths measured,
+    #: which is solo modes plus the last member of every squad. That is a
+    #: different answer from "they were a long way off", so
+    #: `victim_teammates_alive` travels beside it and neither is readable
+    #: alone.
+    victim_nearest_teammate_cm: Mapped[float | None] = mapped_column(Float)
+    victim_teammates_alive: Mapped[int | None] = mapped_column(Integer)
+    #: **1.0% of deaths measured.** Too thin to carry a category — the same
+    #: call `death_type = 'byzone'` got at 3.1%. Recorded because it is one bit
+    #: off a sample already loaded, and reported as a footnote count.
+    victim_in_vehicle: Mapped[bool | None] = mapped_column(Boolean)
+    #: 3.2% of deaths. Shot out of the sky, or landed straight into a fight.
+    victim_parachuting: Mapped[bool | None] = mapped_column(Boolean)
+    #: Staleness of the victim's own sample. Median **1 ms**, p90 32 ms —
+    #: `LogPlayerKillV2` carries the victim's `Character` block, so unlike a
+    #: zone phase a death lands exactly on a sample. Kept because the number
+    #: worth watching is the *teammate's* lag, and a regression that started
+    #: pairing deaths against stale frames would show here first.
+    victim_sample_lag_ms: Mapped[int | None] = mapped_column(Integer)
+
     __table_args__ = (
         Index(
             "ix_kill_killer",

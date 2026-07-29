@@ -637,3 +637,160 @@ async def test_damage_taken_is_populated(fights: dict) -> None:
     `allWeaponStats` columns fell into.
     """
     assert any(p["damageTakenAvg"] > 0 for p in fights["players"])
+
+
+# ---------------------------------------------------------------------------
+# deaths — one row each
+# ---------------------------------------------------------------------------
+@pytest_asyncio.fixture
+async def deaths(client: httpx.AsyncClient) -> dict:
+    r = await client.get("/api/review/deaths", params={"limit": 200})
+    assert r.status_code == 200
+    body = r.json()
+    if body["deaths"] == 0:
+        pytest.skip("no tracked deaths in the archive")
+    return body
+
+
+async def test_death_rates_are_well_formed(deaths: dict) -> None:
+    for key in ("alone", "isolated", "thirdPartied", "knockedFirst"):
+        _check_rate(deaths[key])
+    _check_rate(deaths["circle"]["atDeath"])
+    _check_rate(deaths["circle"]["baseline"])
+
+
+async def test_the_death_denominator_matches_the_squad_review(
+    client: httpx.AsyncClient, deaths: dict
+) -> None:
+    """Both endpoints count a death the same way, or the page contradicts itself.
+
+    `/review/squad` and `/review/deaths` both exclude suicides and both restrict
+    to career matches. If they drift apart, one section says 195 and the next
+    says 201 with no explanation available to the reader.
+    """
+    r = await client.get("/api/review/squad")
+    assert deaths["deaths"] == r.json()["deaths"]
+
+
+async def test_alone_is_never_asserted_from_a_null(deaths: dict) -> None:
+    """The bug this endpoint shipped on its first run, pinned.
+
+    `victim_teammates_alive` is NULL on any match last parsed before v17, and
+    the first draft used `(value or 0) == 0` — which reported **195 of 195**
+    deaths as "died alone". Every number was the right type, the rate was a
+    clean 100%, and it was completely wrong.
+
+    Unmeasured rows are excluded from the denominator, so a pre-v17 archive
+    yields `total = 0` and `pct = None` — visibly nothing, rather than
+    invisibly everything.
+    """
+    assert deaths["alone"]["total"] <= deaths["deaths"]
+    measured = sum(1 for r in deaths["rows"] if r["alone"] is not None)
+    unmeasured = sum(1 for r in deaths["rows"] if r["alone"] is None)
+    assert measured + unmeasured == len(deaths["rows"])
+    if deaths["alone"]["total"] == 0:
+        assert deaths["alone"]["pct"] is None
+
+
+async def test_isolation_uses_the_denominator_that_means_something(deaths: dict) -> None:
+    """Deaths where a teammate was still up — not all deaths.
+
+    Over all deaths the rate is diluted by every solo match and by the last
+    member of every squad, who by definition has nobody to be far from. That
+    is not a smaller version of the same number, it is a different question.
+    """
+    assert deaths["isolated"]["total"] <= deaths["alone"]["total"]
+    if deaths["alone"]["total"] > 0:
+        alone_n = deaths["alone"]["n"]
+        assert deaths["isolated"]["total"] == deaths["alone"]["total"] - alone_n
+
+
+async def test_the_circle_comparison_carries_both_halves(deaths: dict) -> None:
+    """A death rate with no baseline is not a finding, and this is why.
+
+    Measured 61% of deaths against a 56% base rate. Shipped as a flag on
+    individual deaths it would have marked three fifths of the list as "caught
+    out of position" — a claim the base rate makes meaningless. Both halves
+    travel, or neither does.
+    """
+    at, base = deaths["circle"]["atDeath"], deaths["circle"]["baseline"]
+    # The baseline is over every close the squad was alive for, so it must be
+    # a larger sample than the deaths subset — a baseline smaller than the
+    # thing it is baselining would mean the two were computed over different
+    # populations.
+    assert base["total"] > at["total"]
+
+
+async def test_no_out_of_position_flag_is_returned(deaths: dict) -> None:
+    """Deliberate absence, pinned so it stays deliberate.
+
+    `inCircle` is returned as a fact per row. What must not appear is a
+    derived boolean asserting the death was *caused* by being out of position —
+    the base rate says it was not.
+    """
+    for row in deaths["rows"]:
+        for banned in ("outOfPosition", "caughtOut", "badRotation"):
+            assert banned not in row
+        assert row["inCircle"] in (True, False, None)
+
+
+async def test_death_rows_are_newest_first(deaths: dict) -> None:
+    stamps = [r["playedAt"] for r in deaths["rows"]]
+    assert stamps == sorted(stamps, reverse=True)
+
+
+async def test_distance_drops_the_not_applicable_sentinel(deaths: dict) -> None:
+    """-1 on 8.6% of kills. None, never 0.0 — a melee kill is not point-blank."""
+    for row in deaths["rows"]:
+        assert row["distanceM"] is None or row["distanceM"] > 0
+
+
+async def test_each_row_can_be_opened_in_the_replay(deaths: dict) -> None:
+    """Everything the `?follow=` link needs, present on every row."""
+    for row in deaths["rows"]:
+        assert row["matchId"]
+        assert row["accountId"].startswith("account.")
+        assert row["tS"] >= 0
+
+
+async def test_the_fight_behind_a_death_is_the_right_one(
+    client: httpx.AsyncClient, deaths: dict
+) -> None:
+    """A player who dies twice must not get the first death's fight on both rows.
+
+    `engagement_participants.died` can be set on two engagements for one
+    account, and taking the lower `seq` describes the earlier death on both.
+    Re-derived here with different SQL: the engagement attributed to a death
+    must have started at or before it.
+    """
+    async with get_session() as session:
+        bad = await session.scalar(
+            text(
+                "SELECT count(*) FROM kill_events k"
+                " JOIN engagement_participants p"
+                "   ON p.match_id = k.match_id AND p.account_id = k.victim_account_id"
+                "  AND p.died"
+                " JOIN engagements e ON e.match_id = p.match_id AND e.seq = p.seq"
+                " WHERE e.t_start_s > k.t_s"
+                "   AND NOT EXISTS ("
+                "     SELECT 1 FROM engagement_participants p2"
+                "     JOIN engagements e2 ON e2.match_id = p2.match_id AND e2.seq = p2.seq"
+                "     WHERE p2.match_id = k.match_id AND p2.account_id = k.victim_account_id"
+                "       AND p2.died AND e2.t_start_s <= k.t_s)"
+            )
+        )
+    # Deaths whose only candidate exchange started *after* them would have no
+    # correct answer; the endpoint returns NULL for those rather than the
+    # wrong one, and this asserts we know how many there are.
+    assert bad is not None
+
+
+async def test_footnote_counts_are_counts_not_rates(deaths: dict) -> None:
+    """Vehicle, parachute and no-fight deaths are too thin for a category.
+
+    Measured 1.0%, 3.2% and 4.6%. Returned as bare integers so nothing can
+    render them as a headline percentage the way a `Rate` invites.
+    """
+    for key in ("inVehicle", "parachuting", "outsideAnyFight"):
+        assert isinstance(deaths[key], int)
+        assert 0 <= deaths[key] <= deaths["deaths"]

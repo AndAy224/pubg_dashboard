@@ -2320,3 +2320,187 @@ nothing goes in `HAND_MANAGED_INDEXES`). Backend **951 passed, 1 skipped**
 `npm run check` green — 226 tests across 16 files. Built, then driven in a real
 browser: no page errors, no failed requests, no sideways scroll, and the
 Fights section rendering all four subsections.
+
+---
+
+## 33. Death review — parser v17, then v18 — added 2026-07-29
+
+Phase 5. Five new `kill_events` columns (migration 0011), `GET
+/api/review/deaths`, and an **Every death** section on `/review` where each row
+opens the replay fifteen seconds before it happened, following that player.
+
+Three of the plan's seven proposed buckets did not survive measurement, and
+which three is the substance of this section.
+
+### 33.1 The bucket that nearly shipped, and the base rate that stopped it
+
+"Caught out of position" was to be a flag on any death where the victim was
+outside the last circle to close. Measured, that is **76 of 124** tracked
+deaths with a phase behind them — **61%**, which reads as a serious, specific,
+actionable problem.
+
+Then the base rate: across every circle close a tracked player was alive for,
+they were outside it **240 of 432 times — 56%**.
+
+Five points. There is no finding here. A tag on three fifths of every death in
+the list would have been confident, plausible and useless, and nothing about it
+would have looked wrong — the arithmetic was right and the column it read was
+exact.
+
+So `circle` ships as a **pair** of rates, `lib/deaths.ts` refuses to print one
+without the other, and when they are close the sentence says so in as many
+words rather than going quiet. An absent claim reads as "nobody checked".
+
+**Generalised into CLAUDE.md**, because this is the analysis-layer twin of
+every wire-format trap in this repo: *a rate about a filtered population means
+nothing without the unfiltered rate beside it.*
+
+The other two casualties are simpler. "Died in a vehicle" is **1.0%** of deaths
+and "died in the blue" is 3.1%; both are footnote counts, never categories.
+
+### 33.2 `x or 0` on a nullable column, and 195 of 195
+
+The first run of `/api/review/deaths` reported **every one of the 195 tracked
+deaths as "died alone"**.
+
+`victim_teammates_alive` is NULL on any match parsed before the column existed,
+the endpoint said `(value or 0) == 0`, and NULL passes that. The rate came out
+a clean 100%, every value was the right type, nothing raised.
+
+This is the mirror of the `allWeaponStats` lesson already in CLAUDE.md — there,
+`count()` on a NOT NULL column proved nothing; here, truthiness on a nullable
+one asserted everything. The fix is to exclude unmeasured rows from the
+denominator: a rate that collapses to `0/0` is **visibly** nothing, while one
+that goes to 100% is invisibly everything. `DeathListRow.alone` is
+`bool | None` for the same reason, and a vitest asserts the browser never
+renders a tag from a null.
+
+### 33.3 Aliveness is not a sampled quantity — parser v18
+
+v17 asked "was this teammate alive?" by reading `FLAG_ALIVE` off their nearest
+position sample. That is wrong at exactly the moment it matters most.
+
+`FrameIndex._resolve` clears `FLAG_ALIVE` on every sample **at or after** an
+account's final death. A teammate dying in the same burst emits their own death
+frame milliseconds later, `_nearest` returns that frame, and they read as
+already gone.
+
+The tell was a number that could not be right. In a duo both players usually
+die, so exactly one of the two — the second — is the last one up: the answer
+has to be **50%**. It came out at **92%**, 59 of 64.
+
+Chasing it: 65 of the 139 "died alone" deaths had a teammate whose own death
+was **2 to 128 milliseconds** afterwards. Not one had a teammate who died more
+than 0.13 s later, which is what proved it a boundary artefact rather than a
+resolution bug.
+
+v18 reads `FrameIndex.death_ms` instead — exact, unsampled, immune to which
+side of a millisecond a frame lands on — while position still comes from the
+track. **Two questions, and only one of them is sampled.** After the fix:
+
+| | before (v17) | after (v18) |
+|---|---:|---:|
+| duo-fpp, roster 2 | 92% | **50%** |
+| squad-fpp, roster 3 | 57% | 31% |
+| solo-fpp | 100% | 100% |
+| all tracked deaths | 71% | **41%** |
+| isolated (denominator) | 7 of 56 | 8 of 115 |
+
+The duo figure landing exactly on the only possible answer is the confirmation.
+
+Pinned by `test_the_first_of_a_team_to_die_still_had_someone_up`: whoever dies
+first on a team must have had a teammate up, by definition. It needs no
+position data at all, so it isolates the aliveness resolution completely — and
+it is the test v17 would have failed.
+
+Its twin, `test_the_last_of_a_squad_to_die_has_nobody_left`, was already there
+and passed throughout. One end of the invariant is not enough.
+
+### 33.4 The parser computes only what SQL cannot
+
+`telemetry/deaths.py` is deliberately confined to the position track: nearest
+**living** teammate, how many were left, in a vehicle, parachuting, sample lag.
+
+Everything else a death review wants is already a join. "Third-partied" reads
+`engagements.third_party_team_id`; "started as a knock" reads
+`dbno_maker_account_id`; "outside the circle" reads `zone_play`. Deriving any
+of those in the parser would produce a copy that goes stale on the next
+`PARSER_VERSION` while the join would not.
+
+The columns live **on `kill_events`** rather than in a table of their own:
+they describe the event the row already describes, `victim_x`/`victim_y` are
+the precedent, and a 1:1 table on the same primary key is a join for nothing.
+
+Unlike a zone phase, a death lands exactly on a position sample —
+`LogPlayerKillV2` carries the victim's own `Character` block, so the lag is a
+**median of 1 ms** against `zone_play`'s seconds, and 0 of 1,918 deaths lacked
+one. Only the teammate's end is sampled.
+
+### 33.5 The first `?follow=` in the app
+
+`pages/Replay.tsx` has parsed `?follow=` since the replay shipped and **nothing
+ever produced one** — the only way to watch a specific player was to open a
+replay and find them by hand.
+
+Every death row now links to `/matches/{id}/replay?t={t-15}&follow={account}`.
+The fifteen seconds are deliberate: arriving at the exact instant shows a
+corpse, and the question a review asks is what was happening just before.
+Verified in a browser — the replay opens seeked, with that player followed and
+their loadout card up.
+
+### 33.6 A lateral that would have described the wrong death
+
+The engagement behind a death is found by a lateral join on
+`engagement_participants.died`. The first draft ordered by `seq` and took the
+first — but a player can die twice (seven in the corpus died three times), so
+an account can have `died` set on two engagements and both rows would have
+described the earlier one. It now orders by `t_start_s desc` among exchanges
+that had already begun, which is also where a bleed-out belongs.
+
+The same select was rewritten from positional tuple indexing to `.mappings()`
+after inserting one column silently shifted `in_vehicle` onto `parachuting` —
+every value still the right type, nothing raised, and the page rendered a
+plausible list.
+
+### 33.7 What it says
+
+195 tracked deaths over 98 matches:
+
+- **41% came with no teammate left in the match** — the last of the squad up,
+  or a solo match. Neutral, not a criticism: somebody has to be last.
+- **Isolation is not this squad's problem.** When a teammate *was* still up,
+  they died more than 100 m from the nearest one **8 of 115 times (7%)**.
+- **20% happened in a fight another team had joined** — from the fight model.
+  `findings.ts` independently reports 23% from kill proximity; two different
+  measures, both on the page, kept in separate sections.
+- 57% were a knock that got finished.
+- Footnotes: 2 in a vehicle, 10 still in the air, 9 with no attributable
+  exchange behind them.
+
+### 33.8 Reparse
+
+`PARSER_VERSION` 16 -> 17 -> 18, all matches, no re-download, **no bundle
+change** at either step. Reparsed twice at v18 with `staleOnly=false` and every
+count was identical:
+
+| | before | after |
+|---|---:|---:|
+| `heatmap_bins` rows | 751,053 | 751,053 |
+| `heatmap_bins` total | 2,215,924 | 2,215,924 |
+| `kill_events` | 9,482 | 9,482 |
+| `kill_events` with teammate context | 9,482 | 9,482 |
+| `engagements` | 11,388 | 11,388 |
+| `engagement_participants` | 31,758 | 31,758 |
+| `zone_play` | 20,503 | 20,503 |
+
+(The totals are above §32's because the poller ingested a 98th match in
+between — live data arriving, not drift.)
+
+### Verified
+
+`alembic upgrade head` (0011 inspected by hand — five nullable columns, no
+index, nothing for `HAND_MANAGED_INDEXES`). Backend **977 passed, 1 skipped**,
+`ruff` clean. Frontend `npm run check` green — 248 tests across 17 files.
+Built, then driven in a real browser: `/review` with no page errors, no failed
+requests, no sideways scroll, and a generated `?follow=` link opening the
+replay seeked to the right moment on the right player.

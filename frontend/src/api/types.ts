@@ -734,3 +734,68 @@ export interface SquadEngagements {
   rangeBands: EngagementRangeRow[]
   players: EngagementPlayerRow[]
 }
+
+// ---------------------------------------------------------------------------
+// deaths — one row each, and the comparison that stopped a bucket
+// ---------------------------------------------------------------------------
+export interface CircleComparison {
+  /** Deaths where the victim was outside the last circle that closed. */
+  atDeath: Rate
+  /** Every close a tracked player was alive for. Without it, `atDeath` reads
+   *  as an accusation: 61% sounds damning until you see the squad is outside
+   *  the circle at 56% of closes anyway. The pair is the only honest form. */
+  baseline: Rate
+}
+
+export interface DeathListRow {
+  matchId: string
+  seq: number
+  playedAt: string
+  mapName: string
+  tS: number
+  accountId: string
+  name: string
+  winPlace: number
+
+  killerName: string | null
+  killerIsBot: boolean | null
+  weapon: string | null
+  /** METRES, already filtered for the -1 "not applicable" sentinel. */
+  distanceM: number | null
+
+  /** Not mutually exclusive: a death can be third-partied, isolated and
+   *  knocked-first at once. */
+  knockedFirst: boolean
+  thirdPartied: boolean
+  /** **Null means not measured**, not "a teammate was up" — any match last
+   *  parsed before v17. */
+  alone: boolean | null
+  nearestTeammateM: number | null
+  inVehicle: boolean | null
+  parachuting: boolean | null
+  /** Null when no phase had closed yet — 36% of deaths, and a different
+   *  answer from false. */
+  inCircle: boolean | null
+  damageDealt: number | null
+  damageTaken: number | null
+}
+
+export interface SquadDeaths {
+  deaths: number
+  /** The distance beyond which a teammate stops counting as nearby — the same
+   *  100 m `teammateNearPct` uses. A judgement call, reported so the page can
+   *  name it. */
+  isolatedRadiusM: number
+  alone: Rate
+  /** Denominator is deaths where somebody **was** still up. The only one on
+   *  which the question means anything. */
+  isolated: Rate
+  thirdPartied: Rate
+  knockedFirst: Rate
+  circle: CircleComparison
+  /** Footnote counts, not categories — both measured near 1-3%. */
+  inVehicle: number
+  parachuting: number
+  outsideAnyFight: number
+  rows: DeathListRow[]
+}

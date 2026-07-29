@@ -1,16 +1,19 @@
 import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { get } from '../api/client'
+import { Link } from 'react-router'
 import type {
   RangeBandRow,
   SessionRow,
+  SquadDeaths,
   SquadEngagements,
   SquadReview,
 } from '../api/types'
 import { Place, Skeleton, Tile } from '../components/ui'
-import { dateTime, num } from '../lib/format'
+import { dateTime, num, weaponName } from '../lib/format'
 import { rankFindings, rateText, squadFindings } from '../lib/findings'
 import { caveat, engagementFindings } from '../lib/engagements'
+import { circleSentence, deathFindings, replayLink, tagsFor } from '../lib/deaths'
 import './Review.css'
 
 /**
@@ -38,6 +41,10 @@ export function Review() {
     queryKey: ['review', 'engagements'],
     queryFn: () => get<SquadEngagements>('/review/engagements'),
   })
+  const deaths = useQuery({
+    queryKey: ['review', 'deaths'],
+    queryFn: () => get<SquadDeaths>('/review/deaths', { limit: 40 }),
+  })
 
   // Fight findings are ranked **beside** the squad ones rather than mixed into
   // them. They are claims about a modelled grouping, and interleaving the two
@@ -51,6 +58,10 @@ export function Review() {
   const fightFindings = useMemo(
     () => (fights.data ? rankFindings(engagementFindings(fights.data)) : []),
     [fights.data],
+  )
+  const deathList = useMemo(
+    () => (deaths.data ? rankFindings(deathFindings(deaths.data)) : []),
+    [deaths.data],
   )
 
   if (review.isError) {
@@ -75,6 +86,7 @@ export function Review() {
           <Findings findings={findings} review={review.data} />
           <Sessions rows={sessions.data} loading={sessions.isLoading} />
           <Deaths review={review.data} />
+          <EveryDeath data={deaths.data} findings={deathList} loading={deaths.isLoading} />
           <Fights data={fights.data} findings={fightFindings} loading={fights.isLoading} />
           <Ranges bands={review.data.rangeBands} />
           <FirstDown review={review.data} />
@@ -201,6 +213,129 @@ function Deaths({ review }: { review: SquadReview }) {
       </p>
     </section>
   )
+}
+
+// ---------------------------------------------------------------------------
+
+/**
+ * Every death, with a link into the replay fifteen seconds before it.
+ *
+ * This is the first thing in the app to produce `?follow=`. `pages/Replay.tsx`
+ * has parsed it since the replay shipped and nothing ever generated one, so
+ * the only way to watch a specific player was to open the replay and find them
+ * by hand.
+ *
+ * The circle comparison sits above the list rather than as a column, because
+ * it is not a property of any individual death — it is the reason there is no
+ * "caught out of position" column at all.
+ */
+function EveryDeath({
+  data,
+  findings,
+  loading,
+}: {
+  data: SquadDeaths | undefined
+  findings: ReturnType<typeof rankFindings>
+  loading: boolean
+}) {
+  if (loading) return <Skeleton h={240} />
+  if (!data || data.deaths === 0) return null
+
+  const circle = circleSentence(data.circle)
+
+  return (
+    <section className="every-death">
+      <h2>Every death</h2>
+      <p className="faint note">
+        {data.deaths} deaths, newest first. Each row opens the replay 15 seconds
+        before it, following that player. Tags overlap — a death can be
+        third-partied, isolated and knocked-first at once.
+      </p>
+
+      {findings.length > 0 && (
+        <ul className="findings">
+          {findings.map((f) => (
+            <li key={f.id} className={`finding ${f.tone}`}>
+              {f.text}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {circle && (
+        <p className={`compare ${circle.different ? 'differs' : ''}`}>
+          {circle.text}
+        </p>
+      )}
+
+      <table className="death-list">
+        <thead>
+          <tr>
+            <th>When</th>
+            <th>Who</th>
+            <th className="r">At</th>
+            <th>Killed by</th>
+            <th className="r">Range</th>
+            <th className="r">Dealt</th>
+            <th className="r">Took</th>
+            <th>Tags</th>
+            <th />
+          </tr>
+        </thead>
+        <tbody>
+          {data.rows.map((r) => {
+            const tags = tagsFor(r)
+            return (
+              <tr key={`${r.matchId}-${r.seq}`}>
+                <td>{dateTime(r.playedAt)}</td>
+                <td className="name">{r.name}</td>
+                <td className="r num">{clock(r.tS)}</td>
+                <td className="name">{r.killerName ?? '—'}</td>
+                <td className="r num">
+                  {/* Null, not zero: -1 is PUBG's "not applicable" sentinel
+                      and a melee kill is not a point-blank shot. */}
+                  {r.distanceM === null ? '—' : `${Math.round(r.distanceM)} m`}
+                </td>
+                <td className="r num">
+                  {r.damageDealt === null ? '—' : Math.round(r.damageDealt)}
+                </td>
+                <td className="r num">
+                  {r.damageTaken === null ? '—' : Math.round(r.damageTaken)}
+                </td>
+                <td>
+                  <div className="tags">
+                    {tags.map((t) => (
+                      <span key={t} className="tag">
+                        {t}
+                      </span>
+                    ))}
+                    {r.weapon && <span className="tag weapon">{weaponName(r.weapon)}</span>}
+                  </div>
+                </td>
+                <td>
+                  <Link className="watch" to={replayLink(r)}>
+                    watch
+                  </Link>
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+
+      <p className="faint note">
+        Footnotes, all too thin to be categories: {data.inVehicle} deaths in a
+        vehicle, {data.parachuting} still in the air, {data.outsideAnyFight}{' '}
+        with no attributable exchange behind them.
+      </p>
+    </section>
+  )
+}
+
+/** `mm:ss` from the match clock. */
+function clock(t: number): string {
+  const s = Math.max(0, Math.round(t))
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
 }
 
 // ---------------------------------------------------------------------------

@@ -127,3 +127,58 @@
 .review .fight-players .name {
   font-weight: 500;
 }
+
+/* --- every death --------------------------------------------------------- */
+/* The circle comparison. Styled as a note rather than a finding because it is
+ * deliberately *not* a claim about any one death — it is the pair of rates
+ * that stopped "caught out of position" from becoming a column. */
+.review .compare {
+  margin: 12px 0 16px;
+  padding: 8px 12px;
+  border-left: 3px solid var(--border);
+  background: var(--bg-inset);
+  border-radius: 0 4px 4px 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+.review .compare.differs {
+  border-left-color: var(--accent-warn, #c08a3e);
+  color: var(--text);
+}
+
+.review .death-list .name {
+  font-weight: 500;
+}
+
+.review .tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.review .tag {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--bg-hover);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.review .tag.weapon {
+  background: transparent;
+  border: 1px solid var(--border);
+}
+
+.review .watch {
+  font-size: 12px;
+  color: var(--accent, #4a9eff);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.review .watch:hover {
+  text-decoration: underline;
+}

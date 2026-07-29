@@ -204,7 +204,32 @@ BUNDLE_VERSION: Final = 1
 #:      cross-team kills land 20 s or more after the killer's last attributed
 #:      hit on the victim. **No bundle change**: `hits` already carried
 #:      everything this needs.
-PARSER_VERSION: Final = 16
+#:
+#: v17: death review. Five new `kill_events` columns describing the victim's
+#:      context at the instant they died — nearest **living** teammate, how
+#:      many were left, in a vehicle, parachuting, sample lag.
+#:
+#:      Only what SQL cannot already answer. "Third-partied" joins
+#:      `engagements`, "started as a knock" reads `dbno_maker_account_id`,
+#:      "outside the circle" reads `zone_play`; copying any of those into the
+#:      parser would go stale on the next version while the join would not.
+#:
+#:      Unlike a zone phase, a death lands **exactly** on a position sample —
+#:      `LogPlayerKillV2` carries the victim's `Character` block, so the lag
+#:      is a median of 1 ms. **No bundle change.**
+#:
+#: v18: fixes v17's teammate aliveness. It read `FLAG_ALIVE` off the nearest
+#:      position sample, and `FrameIndex._resolve` clears that flag on every
+#:      sample at or after an account's final death — so a teammate dying in
+#:      the same burst, whose death frame lands milliseconds later, read as
+#:      already gone. 65 of 139 "died alone" deaths had a teammate whose own
+#:      death was 2-128 ms afterwards, and the squad's duo figure came out at
+#:      92%, which is what made it worth checking.
+#:
+#:      Aliveness now comes from `FrameIndex.death_ms` — exact, unsampled —
+#:      while position still comes from the track. Two questions, and only one
+#:      of them is sampled. **No bundle change.**
+PARSER_VERSION: Final = 18
 
 DEFAULT_TICK_MS: Final = 100
 FALLBACK_TICK_MS: Final = 1000

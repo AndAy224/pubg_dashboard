@@ -207,6 +207,21 @@ adding. If a parsed match has no ledger, persist *refuses* rather than
 proceeding — a heatmap that is quietly 2x is indistinguishable from a popular
 drop spot.
 
+**The parser computes only what SQL cannot.** `telemetry/deaths.py` adds five
+columns to `kill_events` describing the victim's context at the instant they
+died, and it is deliberately confined to what the position track alone can
+answer: how far the nearest **living** teammate was, how many were left, in a
+vehicle, parachuting. "Was it a third party" joins `engagements`, "did it start
+as a knock" reads `dbno_maker_account_id`, "were they in the circle" reads
+`zone_play` — copying any of those into the parser would go stale on the next
+`PARSER_VERSION` while the join would not.
+
+Unlike a zone phase, a death lands **exactly** on a position sample:
+`LogPlayerKillV2` carries the victim's own `Character` block, so the lag is a
+median of 1 ms against `zone_play`'s seconds. Only the teammate's end of the
+measurement is sampled, which is why `TEAMMATE_PAIR_MS` drops a teammate whose
+track went quiet rather than reporting a stale position as a distance.
+
 **`telemetry/engagements.py` is the parser's only model.** Everything else it
 writes is a reading of something PUBG states — a kill, a knock, a circle
 roster, a position. PUBG does **not** record fights, so an "engagement" is a
@@ -486,6 +501,41 @@ the browser on `/`, or the download wedges every shell on the box.
 
 It probes the deployed `dist/`, so **rebuild before probing** or you are testing
 the previous build and concluding things about code that is not running.
+
+## A rate about a subset means nothing without the rate about everything else
+
+**"61% of your deaths happened while you were outside the circle" is not a
+finding. The squad is outside the circle at 56% of closes anyway.** That five
+point difference was one query away, and without it the number reads as a
+diagnosis — it was one edit from shipping as a "caught out of position" tag on
+three fifths of every death in the list.
+
+This is the analysis-layer twin of the wire-format traps above, and it fails
+the same way: nothing throws, the arithmetic is right, and the output is
+confidently wrong. Any rate computed over a filtered population — deaths,
+losses, bad placements — needs the unfiltered rate beside it before it can be
+called anything. `/api/review/deaths` returns `circle` as a **pair** of rates
+for this reason, and `lib/deaths.ts` refuses to print one without the other.
+
+When they turn out to be the same, say so out loud rather than dropping the
+sentence. An absence reads as "nobody checked".
+
+## `x or 0` on a nullable column is the same bug as `count()` on a NOT NULL one
+
+`/api/review/deaths` shipped its first run reporting **195 of 195 deaths as
+"died alone"**. `victim_teammates_alive` is NULL on any match parsed before the
+column existed, `(value or 0) == 0` is `True` for NULL, and the result was a
+clean 100% rate of the most alarming possible kind.
+
+Nullable columns in this schema are nullable **on purpose** and NULL is a real
+answer: `victim_nearest_teammate_cm` is NULL on 65% of deaths because nobody
+was left alive to be near, which is not the same as being far away;
+`zone_play.in_circle_at_close` is NULL when that half of the phase pair never
+fired; `DeathListRow.in_circle` is NULL on the 36% of deaths that happened
+before any circle closed. Test `is None` / `is True` / `is False` explicitly,
+and exclude unmeasured rows from the denominator rather than counting them as
+either answer — a rate that shrinks to `0/0` is visibly nothing, while one that
+goes to 100% is invisibly everything.
 
 ## Error messages must not name a cause they have not checked
 

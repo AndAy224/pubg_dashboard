@@ -944,3 +944,115 @@ class SquadEngagements(ApiModel):
     third_party: Rate
     range_bands: list[EngagementRangeRow]
     players: list[EngagementPlayerRow]
+
+
+# ---------------------------------------------------------------------------
+# deaths — one row per death, and the one comparison that stopped a bucket
+# ---------------------------------------------------------------------------
+class CircleComparison(ApiModel):
+    """Out of the circle when we died, against out of the circle in general.
+
+    **This exists instead of a "caught out of position" bucket.** Measured, 76
+    of 124 tracked deaths that had a phase behind them (61%) came while the
+    victim was outside the last circle to close — which reads as a serious
+    problem until you measure the base rate, and the squad is outside the
+    circle at 240 of 432 closes it was alive for (56%) anyway.
+
+    A flag on 61% of deaths would have been a confident, plausible, useless
+    claim. The pair is the only honest form: the difference is the finding, and
+    right now there is barely one.
+    """
+
+    #: Deaths where the victim was outside the last circle that closed.
+    at_death: Rate
+    #: Every close a tracked player was alive for. The denominator that turns
+    #: `at_death` from an accusation into a comparison.
+    baseline: Rate
+
+
+class DeathListRow(ApiModel):
+    """One death, with everything known about the moment it happened.
+
+    Flags are **not** mutually exclusive and are not meant to be: a death can
+    be third-partied, isolated and knocked-first at once, and forcing a
+    partition would need a precedence order nothing in the data justifies.
+    Same convention as `DeathCauseRow`.
+    """
+
+    match_id: str
+    seq: int
+    played_at: dt.datetime
+    map_name: str
+    t_s: float
+    account_id: str
+    name: str
+    win_place: int
+
+    killer_name: str | None
+    killer_is_bot: bool | None
+    weapon: str | None
+    #: METRES, already filtered for the -1 "not applicable" sentinel — None
+    #: rather than a fake zero.
+    distance_m: float | None
+
+    knocked_first: bool
+    third_partied: bool
+    #: Nobody on the roster was still in the match. Not a failure — it is every
+    #: solo match and the last member of every squad.
+    #:
+    #: **None means not measured**, which is any match last parsed before v17.
+    #: False would assert that a teammate was up, and this row does not know
+    #: that. The endpoint made exactly that mistake on its first run and
+    #: reported 195 of 195 deaths as alone.
+    alone: bool | None
+    #: METRES to the nearest **living** teammate. None when `alone`.
+    nearest_teammate_m: float | None
+    in_vehicle: bool | None
+    parachuting: bool | None
+    #: Inside the last circle to close before this death. None when no phase
+    #: had closed yet — 36% of deaths, and a different answer from False.
+    in_circle: bool | None
+    #: What this player did in the exchange they died in, when there was one.
+    #: None means the death attached to no exchange at all (4.6% measured).
+    damage_dealt: float | None
+    damage_taken: float | None
+
+
+class SquadDeaths(ApiModel):
+    """How the squad's deaths actually happen, one row at a time.
+
+    The rates here are deliberately **not** the same five as
+    `SquadReview.death_causes`. That endpoint answers "what kind of death was
+    it" from `kill_events` alone; this one adds what only the position track
+    and the fight model can say — who was left, how far away, and whether
+    somebody else was shooting at the same time.
+    """
+
+    deaths: int
+    #: The distance beyond which a teammate stops counting as nearby. The same
+    #: 100 m `strategy_metrics.teammate_near_pct` uses, so the two cannot drift
+    #: apart — it is a judgement call and is reported rather than left implicit.
+    isolated_radius_m: int
+
+    #: Nobody on the roster was still in the match. The denominator is deaths
+    #: whose match has been parsed at v17 or later, **not** all deaths — an
+    #: unmeasured row is excluded rather than counted either way.
+    alone: Rate
+    #: Of deaths where somebody **was** still up — the only denominator on
+    #: which the question means anything.
+    isolated: Rate
+    #: Another team was fighting one of the two sides at the same time, from
+    #: `engagements.third_party_team_id`. A sharper measure than
+    #: `SquadReview.third_party`, which looks for a nearby kill instead.
+    third_partied: Rate
+    knocked_first: Rate
+    circle: CircleComparison
+
+    #: Footnote counts, not categories — both measured near 1-3%, the same
+    #: call `zone_deaths` got.
+    in_vehicle: int
+    parachuting: int
+    #: Deaths that attached to no exchange at all.
+    outside_any_fight: int
+
+    rows: list[DeathListRow]

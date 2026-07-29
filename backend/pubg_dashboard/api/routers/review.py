@@ -29,12 +29,14 @@ from __future__ import annotations
 from typing import Annotated, Any, Final
 
 from fastapi import APIRouter, Query
-from sqlalchemy import case, exists, func, or_, select
+from sqlalchemy import case, exists, func, or_, select, true
 from sqlalchemy.sql import ColumnElement
 
 from pubg_dashboard.api.deps import career_filter
 from pubg_dashboard.api.schemas import (
+    CircleComparison,
     DeathCauseRow,
+    DeathListRow,
     EngagementPlayerRow,
     EngagementRangeRow,
     EngagementResultRow,
@@ -43,6 +45,7 @@ from pubg_dashboard.api.schemas import (
     RangeBandRow,
     Rate,
     SessionRow,
+    SquadDeaths,
     SquadEngagements,
     SquadReview,
 )
@@ -54,6 +57,7 @@ from pubg_dashboard.db.models import (
     Match,
     Participant,
     Player,
+    ZonePlay,
 )
 from pubg_dashboard.db.session import SessionDep
 from pubg_dashboard.telemetry.engagements import (
@@ -62,6 +66,7 @@ from pubg_dashboard.telemetry.engagements import (
 from pubg_dashboard.telemetry.engagements import (
     THIRD_PARTY_RADIUS_CM as ENGAGEMENT_THIRD_PARTY_RADIUS_CM,
 )
+from pubg_dashboard.telemetry.strategy import NEAR_TEAMMATE_CM
 
 router = APIRouter(tags=["review"])
 
@@ -620,6 +625,241 @@ async def _engagement_players(
         )
         for account, name, n, dealt, taken, knocked, died in rows
     ]
+
+
+@router.get("/review/deaths", response_model=SquadDeaths)
+async def squad_deaths(
+    session: SessionDep,
+    limit: Annotated[int, Query(ge=1, le=200)] = 60,
+) -> SquadDeaths:
+    """One row per tracked death, plus the rates that survived measurement.
+
+    Three of the plan's proposed buckets did not survive, and saying which is
+    the point of this docstring:
+
+    * **"died in the blue"** — 6 of 195. A footnote, never a category.
+    * **"died in a vehicle"** — 1.0% of all deaths. Same call.
+    * **"caught out of position"** — this one nearly shipped. 61% of tracked
+      deaths that had a phase behind them came while the victim was outside
+      the last circle to close, which reads as a finding until you measure how
+      often they are outside it anyway: **56%**. So it is returned as
+      `circle`, a pair of rates, and not as a flag on three fifths of every
+      death list.
+
+    What is left is genuinely additive: who was still alive, how far away, and
+    whether a third team was in the fight.
+    """
+    career = _career_matches()
+    tracked = _tracked_ids()
+
+    k = KillEvent.__table__
+    z = ZonePlay.__table__
+    ep = EngagementParticipant.__table__
+
+    ours = (
+        select(k)
+        .where(
+            k.c.match_id.in_(career),
+            k.c.victim_account_id.in_(tracked),
+            # A suicide is a real death but not a thing an opponent did, and
+            # every rate here is about opponents. Same exclusion as
+            # `/review/squad`, so the two share a denominator.
+            k.c.is_suicide.is_(False),
+        )
+        .subquery()
+    )
+
+    # The last circle to *close* before this death. Correlated and ordered by
+    # phase rather than by time: `close_t_s` is NULL on a phase that only ever
+    # announced, and ordering by a NULL would put it first.
+    last_circle = (
+        select(z.c.in_circle_at_close)
+        .where(
+            z.c.match_id == ours.c.match_id,
+            z.c.account_id == ours.c.victim_account_id,
+            z.c.close_t_s.is_not(None),
+            z.c.close_t_s <= ours.c.t_s,
+        )
+        .order_by(z.c.phase.desc())
+        .limit(1)
+        .scalar_subquery()
+    )
+
+    # The exchange **this** death happened in. `died` is set by the parser
+    # when a kill attached to an engagement, so this is a lookup rather than a
+    # reconstruction — NULL for the 1.4% that attached to nothing.
+    #
+    # The `t_start_s <= t_s` predicate is not decoration. A player can die
+    # twice (comeback modes; seven in the corpus died three times), so an
+    # account can have `died` set on two engagements, and taking whichever has
+    # the lower `seq` would describe the *earlier* death on both rows. Ordering
+    # by start time descending picks the last exchange that had begun — which
+    # is where a bleed-out belongs too, since the kill was attached to an
+    # exchange that ended before it.
+    eng = Engagement.__table__
+    fight = (
+        select(
+            ep.c.seq,
+            ep.c.damage_dealt,
+            ep.c.damage_taken,
+            eng.c.third_party_team_id,
+        )
+        .select_from(ep)
+        .join(eng, (eng.c.match_id == ep.c.match_id) & (eng.c.seq == ep.c.seq))
+        .where(
+            ep.c.match_id == ours.c.match_id,
+            ep.c.account_id == ours.c.victim_account_id,
+            ep.c.died.is_(True),
+            eng.c.t_start_s <= ours.c.t_s,
+        )
+        .order_by(eng.c.t_start_s.desc())
+        .limit(1)
+        .lateral("fight")
+    )
+
+    killer = Participant.__table__.alias("killer")
+    victim = Participant.__table__.alias("victim")
+
+    # Labelled, and read back through `.mappings()`. An earlier draft indexed
+    # the tuple positionally and inserting one column silently shifted
+    # `in_vehicle` onto `parachuting` — every value still the right *type*, so
+    # nothing raised and the page rendered a plausible list.
+    stmt = (
+        select(
+            ours.c.match_id.label("match_id"),
+            ours.c.seq.label("seq"),
+            Match.played_at.label("played_at"),
+            Match.map_name.label("map_name"),
+            ours.c.t_s.label("t_s"),
+            ours.c.victim_account_id.label("account_id"),
+            victim.c.name.label("name"),
+            victim.c.win_place.label("win_place"),
+            killer.c.name.label("killer_name"),
+            ours.c.killer_is_bot.label("killer_is_bot"),
+            ours.c.weapon.label("weapon"),
+            ours.c.distance_cm.label("distance_cm"),
+            ours.c.dbno_maker_account_id.label("dbno_maker"),
+            ours.c.victim_nearest_teammate_cm.label("nearest_cm"),
+            ours.c.victim_teammates_alive.label("teammates_alive"),
+            ours.c.victim_in_vehicle.label("in_vehicle"),
+            ours.c.victim_parachuting.label("parachuting"),
+            last_circle.label("in_circle"),
+            fight.c.third_party_team_id.label("third_party_team_id"),
+            fight.c.seq.label("fight_seq"),
+            fight.c.damage_dealt.label("damage_dealt"),
+            fight.c.damage_taken.label("damage_taken"),
+        )
+        .select_from(ours)
+        .join(Match, Match.match_id == ours.c.match_id)
+        .join(
+            victim,
+            (victim.c.match_id == ours.c.match_id)
+            & (victim.c.account_id == ours.c.victim_account_id),
+        )
+        .outerjoin(
+            killer,
+            (killer.c.match_id == ours.c.match_id)
+            & (killer.c.account_id == ours.c.killer_account_id),
+        )
+        .outerjoin(fight, true())
+        .order_by(Match.played_at.desc(), ours.c.t_s.desc())
+    )
+
+    all_rows = (await session.execute(stmt)).mappings().all()
+    rows = [_death_row(r) for r in all_rows[:limit]]
+
+    deaths = len(all_rows)
+
+    # **`is None` everywhere, never truthiness.** `teammates_alive` is NULL on
+    # a match parsed before v17, and `or 0` would turn every one of those into
+    # "died alone" — 195 of 195, a confident, catastrophic, entirely plausible
+    # answer. It rendered exactly that on the first run of this endpoint,
+    # before the archive had been reparsed. Unmeasured rows are excluded from
+    # the denominator instead, so the rate shrinks to nothing rather than
+    # going to 100%.
+    measured = [r for r in all_rows if r["teammates_alive"] is not None]
+    with_company = [r for r in measured if r["teammates_alive"] > 0]
+    alone = sum(1 for r in measured if r["teammates_alive"] == 0)
+    isolated = sum(
+        1
+        for r in with_company
+        if r["nearest_cm"] is not None and r["nearest_cm"] > NEAR_TEAMMATE_CM
+    )
+    # `is False` rather than `not`: `in_circle` is None on the 36% of deaths
+    # with no phase behind them, and those belong in neither half.
+    outside = sum(1 for r in all_rows if r["in_circle"] is False)
+    measurable = sum(1 for r in all_rows if r["in_circle"] is not None)
+
+    baseline = (
+        await session.execute(
+            select(
+                func.count().filter(z.c.in_circle_at_close.is_(False)),
+                func.count(),
+            ).where(
+                z.c.match_id.in_(career),
+                z.c.account_id.in_(tracked),
+                z.c.alive_at_close.is_(True),
+                z.c.in_circle_at_close.is_not(None),
+            )
+        )
+    ).one()
+
+    return SquadDeaths(
+        deaths=deaths,
+        isolated_radius_m=int(NEAR_TEAMMATE_CM / 100),
+        alone=_rate(alone, len(measured)),
+        isolated=_rate(isolated, len(with_company)),
+        third_partied=_rate(
+            sum(1 for r in all_rows if r["third_party_team_id"] is not None), deaths
+        ),
+        knocked_first=_rate(sum(1 for r in all_rows if r["dbno_maker"] is not None), deaths),
+        circle=CircleComparison(
+            at_death=_rate(outside, measurable),
+            baseline=_rate(int(baseline[0] or 0), int(baseline[1] or 0)),
+        ),
+        in_vehicle=sum(1 for r in all_rows if r["in_vehicle"] is True),
+        parachuting=sum(1 for r in all_rows if r["parachuting"] is True),
+        outside_any_fight=sum(1 for r in all_rows if r["fight_seq"] is None),
+        rows=rows,
+    )
+
+
+def _death_row(r: Any) -> DeathListRow:
+    """One labelled result row -> one `DeathListRow`."""
+    nearest = r["nearest_cm"]
+    alive = r["teammates_alive"]
+    distance = r["distance_cm"]
+    return DeathListRow(
+        match_id=r["match_id"],
+        seq=int(r["seq"]),
+        played_at=r["played_at"],
+        map_name=r["map_name"],
+        t_s=float(r["t_s"]),
+        account_id=r["account_id"],
+        name=r["name"] or r["account_id"],
+        win_place=int(r["win_place"] or 0),
+        killer_name=r["killer_name"],
+        killer_is_bot=r["killer_is_bot"],
+        weapon=r["weapon"],
+        # -1 is "not applicable" on 8.6% of kills. None, never 0.0, or every
+        # melee kill renders as a point-blank shot.
+        distance_m=(float(distance) / 100.0 if distance is not None and distance > 0 else None),
+        knocked_first=r["dbno_maker"] is not None,
+        third_partied=r["third_party_team_id"] is not None,
+        # None means "not measured" — a match parsed before v17. False would
+        # claim a teammate was up, which is a fact this row does not have.
+        alone=None if alive is None else alive == 0,
+        nearest_teammate_m=(float(nearest) / 100.0 if nearest is not None else None),
+        in_vehicle=r["in_vehicle"],
+        parachuting=r["parachuting"],
+        in_circle=r["in_circle"],
+        damage_dealt=(
+            float(r["damage_dealt"]) if r["damage_dealt"] is not None else None
+        ),
+        damage_taken=(
+            float(r["damage_taken"]) if r["damage_taken"] is not None else None
+        ),
+    )
 
 
 @router.get("/review/sessions", response_model=list[SessionRow])
