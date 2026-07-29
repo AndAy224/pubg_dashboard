@@ -604,3 +604,113 @@ class StrategyBaseline(ApiModel):
     matches: int
     place_max: int | None = None
 
+
+
+# ---------------------------------------------------------------------------
+# review — squad retrospective
+# ---------------------------------------------------------------------------
+class Rate(ApiModel):
+    """A count over a denominator, never pre-divided.
+
+    Both halves travel so the frontend can print "144 of 200" rather than
+    "72%". A percentage alone hides its sample, and with 41-93 matches per
+    player the sample is the part most likely to make a claim worthless.
+    `pct` is None when `total` is 0 — never 0.0, which would read as a real
+    measured zero.
+    """
+
+    n: int
+    total: int
+    pct: float | None = None
+
+
+class KnockConversion(ApiModel):
+    """Both directions of the knock-to-kill funnel.
+
+    The two sides are the point: finishing your own knocks and surviving
+    theirs are different skills, and only the contrast says which one is
+    costing the squad. Humans only on both sides — bots are just over half
+    the tracked players' kills and would drown the signal.
+    """
+
+    #: Knocks we landed on humans, and how many we converted to a kill.
+    made: Rate
+    #: Knocks landed on us, and how many became deaths. The complement is the
+    #: revive-or-escape rate.
+    taken: Rate
+
+
+class FirstDeathRow(ApiModel):
+    """How often one player is the first of the squad to go down."""
+
+    account_id: str
+    name: str
+    died_first: int
+    #: Matches where at least two tracked players were on the roster, so
+    #: "first" means something. Solo and duo-with-strangers matches are out.
+    squad_matches: int
+
+
+class RangeBandRow(ApiModel):
+    """Kills for and against inside one distance band.
+
+    `distance_cm` carries a **-1 "not applicable" sentinel on 8.6% of kills**,
+    filtered out here rather than bucketed into the 0 m band.
+    """
+
+    lo_m: int
+    #: None on the open-ended top band.
+    hi_m: int | None
+    we_killed: int
+    we_died: int
+
+
+class DeathCauseRow(ApiModel):
+    """One classified cause, with the count that earns it a place."""
+
+    cause: str
+    n: int
+    label: str
+
+
+class SquadReview(ApiModel):
+    """Everything the Review page states about how the squad plays.
+
+    Deliberately rows and counts, not conclusions: the sentences are built in
+    `lib/findings.ts` where they are hermetically testable, exactly as the
+    best-vs-worst contrast already is.
+    """
+
+    matches: int
+    #: Deaths of tracked players in career matches — the denominator behind
+    #: `third_party` and `death_causes`.
+    deaths: int
+    #: Deaths with another team's kill nearby and just before. See
+    #: `THIRD_PARTY_RADIUS_CM` / `THIRD_PARTY_WINDOW_S` for the thresholds,
+    #: which are a judgement call and are reported so the page can say so.
+    third_party: Rate
+    third_party_radius_m: int
+    third_party_window_s: int
+    knocks: KnockConversion
+    first_deaths: list[FirstDeathRow]
+    range_bands: list[RangeBandRow]
+    death_causes: list[DeathCauseRow]
+    #: Deaths to the blue zone. **Not a `death_causes` bucket** — 6 in 195
+    #: measured, which is a footnote, not a category.
+    zone_deaths: int
+
+
+class SessionRow(ApiModel):
+    """One evening of play, squad-wide."""
+
+    started_at: dt.datetime
+    ended_at: dt.datetime
+    matches: int
+    best_place: int
+    wins: int
+    top10: int
+    kills: int
+    deaths: int
+    damage: float
+    #: Placement of each match, newest first — the session's shape at a glance.
+    places: list[int]

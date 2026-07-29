@@ -12,6 +12,7 @@ const NAV = [
   { to: '/matches', label: 'Matches' },
   { to: '/heatmaps', label: 'Heatmaps' },
   { to: '/compare', label: 'Compare' },
+  { to: '/review', label: 'Review' },
   { to: '/strategy', label: 'Strategy' },
 ]
 

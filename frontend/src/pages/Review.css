@@ -1,0 +1,101 @@
+/* Everything scoped under .review: Vite injects a lazy chunk's stylesheet
+ * globally on first visit and never removes it, so an unscoped rule here would
+ * style every other page for the rest of the session. `.sessions`, `.ranges`
+ * and `.places` are exactly the kind of generic names that collided once
+ * before — `.feed-row` was declared by two sheets and the replay's grid landed
+ * on the home page's match rows. */
+
+.review section {
+  margin-bottom: 28px;
+}
+
+.review h2 {
+  margin-bottom: 4px;
+}
+
+.review .note {
+  font-size: 12px;
+  margin-bottom: 12px;
+  max-width: 70ch;
+  line-height: 1.5;
+}
+
+/* --- findings ------------------------------------------------------------ */
+
+.review .findings {
+  display: grid;
+  gap: 8px;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.review .finding {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: 3px;
+  padding: 10px 14px;
+  line-height: 1.5;
+  font-size: 14px;
+}
+
+/* Tone colours the rule on the left only. The sentence itself stays in body
+ * ink: a green paragraph reads as a verdict, and these are observations. */
+.review .finding.good {
+  border-left-color: var(--good);
+}
+
+.review .finding.bad {
+  border-left-color: var(--bad);
+}
+
+.review .finding.neutral {
+  border-left-color: var(--border);
+}
+
+/* --- sessions ------------------------------------------------------------ */
+
+.review .places {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.review table.sessions td {
+  vertical-align: middle;
+}
+
+/* --- ranges -------------------------------------------------------------- */
+
+.review .vol-track {
+  position: relative;
+  height: 16px;
+  background: var(--bg-inset);
+  border-radius: 2px;
+  min-width: 120px;
+}
+
+.review .vol-fill {
+  height: 100%;
+  background: var(--bg-hover);
+  border-radius: 2px;
+}
+
+.review .vol-n {
+  position: absolute;
+  inset: 0 6px 0 auto;
+  display: flex;
+  align-items: center;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+/* --- narrow screens ------------------------------------------------------ */
+/* Tables here have up to seven columns; let them scroll inside the section
+ * rather than forcing the page body to scroll sideways. */
+@media (max-width: 900px) {
+  .review section {
+    overflow-x: auto;
+  }
+}

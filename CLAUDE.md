@@ -236,8 +236,16 @@ Full list: BUILD-SPEC §6 (34 of them) and HANDOFF §5. The ones that bite most:
   unrelated bots. `players` is human-only, enforced by
   `CHECK (account_id LIKE 'account.%')`; `participants.account_id` has no FK.
   Bots exist only as participant rows flagged `is_bot`.
-- **Bots are ~19% of all kills and just over half of the tracked players'.**
-  `kills_human` is the default everywhere; raw `kills` roughly doubles some K/Ds.
+- **The bot share moves between measurements — re-measure before quoting it.**
+  This line used to read "~19% of all kills and just over half of the tracked
+  players'". At 97 matches both halves are wrong: bots are **14.0% of all
+  participants** (1,265/9,041) but only **6.7%** of official-match ones
+  (545/8,116), **6.6% of official kill victims** (545/8,289), and **11% of the
+  tracked players' kills** (27/238 — SIERIUS_ 10%, DaddyGainz 5%, AndAy 26%).
+  The 19% came from the 65-match corpus and did not survive the archive
+  growing. `kills_human` stays the default everywhere — that decision is right
+  independently of the ratio, and the ratio is exactly the kind of number that
+  goes stale in a document while looking authoritative.
 - **`NULL != NULL` in Postgres**, so `heatmap_bins` uses `''` sentinels in its
   primary key for `account_id` and `game_mode`. Nullable "all" columns would
   make `ON CONFLICT DO UPDATE` never fire and every reparse would append

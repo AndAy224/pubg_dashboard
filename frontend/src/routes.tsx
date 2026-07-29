@@ -20,6 +20,10 @@ const Compare = lazy(() => import('./pages/Compare').then((m) => ({ default: m.C
 // analysis page is a destination, not part of anyone's first paint.
 const Strategy = lazy(() => import('./pages/Strategy').then((m) => ({ default: m.Strategy })))
 
+// Same reasoning: no heavy dependency, but the retrospective is somewhere you
+// go on purpose, not part of the Overview's first paint.
+const Review = lazy(() => import('./pages/Review').then((m) => ({ default: m.Review })))
+
 function Loading() {
   return <div className="empty">loading…</div>
 }
@@ -39,6 +43,7 @@ export const routes: RouteObject[] = [
       { path: 'matches/:matchId', element: <Match /> },
       { path: 'heatmaps', element: <Heatmaps /> },
       { path: 'compare', element: lazyRoute(<Compare />) },
+      { path: 'review', element: lazyRoute(<Review />) },
       { path: 'strategy', element: lazyRoute(<Strategy />) },
       { path: 'settings', element: <Settings /> },
       { path: '*', element: <div className="empty">no such page</div> },

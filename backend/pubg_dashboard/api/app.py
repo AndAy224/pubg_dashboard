@@ -23,6 +23,7 @@ from pubg_dashboard.api.routers import (
     matches,
     overview,
     players,
+    review,
     strategy,
     tiles,
 )
@@ -76,7 +77,7 @@ def create_app() -> FastAPI:
             expose_headers=["Content-Encoding", "X-Parser-Version"],
         )
 
-    for module in (health, overview, players, matches, heatmap, ingest, strategy, tiles):
+    for module in (health, overview, players, matches, heatmap, ingest, review, strategy, tiles):
         app.include_router(module.router, prefix=API_PREFIX)
 
     _mount_frontend(app)

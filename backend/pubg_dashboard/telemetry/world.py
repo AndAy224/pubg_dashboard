@@ -133,9 +133,22 @@ class PhaseChange:
     """A blue-zone phase step, and who was inside the white circle for it.
 
     `playersInWhiteCircle` is exact ground truth for the question
-    `strategy_metrics.rotate_lag_s` currently answers with a heuristic. Note
-    each phase **number appears twice** per match, so "were we in the circle at
-    phase N" must take the later event: the first reports the whole lobby.
+    `strategy_metrics.rotate_lag_s` currently answers with a heuristic.
+
+    Each phase **number appears twice** per match, and this docstring used to
+    say the first "reports the whole lobby" so the later event should win.
+    That is wrong: measured across 8 bundles / 65 phase pairs the first event
+    is larger in only **18 of 65**, and its count on a 101-player match is 57.
+
+    The pair is the white-circle **announcement** and the moment the blue
+    **starts closing** — 240 s apart for phase 1, then 80/80/80/80/60 s, which
+    are PUBG's own zone timings. Both are worth having: "already safe when the
+    circle appeared" and "safe when the blue caught up" are different
+    questions, and the roster growing between them is players rotating in.
+
+    Two edges when consuming this: phase 1's announcement fires at ~91 s while
+    much of the lobby is still airborne over the circle, and a match can end on
+    an announcement that never closes — so do not assume pairs.
     """
 
     t_s: float

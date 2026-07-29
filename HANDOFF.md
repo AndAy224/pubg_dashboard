@@ -1461,11 +1461,39 @@ document. It is not a new statistic, and no stat page was built on it.
 
 `LogPhaseChange.playersInWhiteCircle` is also carried now — exact ground truth
 for the question `strategy_metrics.rotate_lag_s` answers with a heuristic. Two
-properties, both measured: each phase **number appears twice** per match (so
-"were we in the circle at phase N" must take the later event, or the first
-reports most of the lobby), and the roster **does not shrink monotonically** —
-one match runs 17, 15, 8, 8, 9, 5, because the circle keeps getting smaller
-while players keep rotating into it.
+properties, both measured: each phase **number appears twice** per match, and
+the roster **does not shrink monotonically** — one match runs 17, 15, 8, 8, 9,
+5, because the circle keeps getting smaller while players keep rotating into it.
+
+> **Correction, 2026-07-29.** The parenthetical above used to say the pair must
+> be resolved by taking the later event "or the first reports most of the
+> lobby". Measured across 8 bundles / 65 phase pairs, **the first event is
+> larger in only 18 of 65** — and its count on the match quoted here is 57,
+> which is not a 101-player lobby.
+>
+> The real semantics fall out once `t` is decoded correctly: phase-event `t` is
+> in **ticks of `tickMs` (100 ms)**, not milliseconds. Read that way the pair is
+> the white-circle **announcement** and the moment the blue **starts closing**:
+>
+> ```
+> phase 1:   90.8s n=57    330.3s n=34    240s apart
+> phase 2:  600.5s n= 9    680.4s n=13     80s apart
+> phase 3:  780.5s n=11    860.5s n=18     80s apart
+> phase 4:  960.6s n=12   1040.5s n=15     80s apart
+> phase 5: 1140.5s n= 7   1220.3s n= 7     80s apart
+> phase 6: 1300.3s n= 2   1360.1s n= 2     60s apart
+> phase 7: 1420.1s n= 1                    single
+> ```
+>
+> Those gaps are PUBG's own zone timings. So **both events are worth keeping**:
+> "were we already safe when the circle appeared" and "were we safe when the
+> blue caught up" are two different pieces of coaching, and the roster moving
+> up between them is players rotating in, not a bad reading being corrected.
+> Phase 1's first event is the outlier — it fires at ~91 s while much of the
+> lobby is still airborne over the circle.
+>
+> A match can also end on an announcement that never closes, so handle the
+> missing side rather than assuming pairs.
 
 Cost: average bundle 134,508 → **134,794 bytes**, +0.2%.
 
@@ -1661,3 +1689,114 @@ Parser **v14**. Bundle average 134,794 → **134,861 bytes**, +0.05%.
   calls time out** (`Runtime.callFunctionOn timed out`), which looks exactly
   like a wedged page. The fix was to stop zooming, not to raise the timeout:
   the crate is clickable where it already is.
+
+---
+
+## 29. The Review page — added 2026-07-29
+
+**What**: a `/review` route answering "what happened in these games", a
+`/api/review/*` router, and `frontend/src/lib/findings.ts` — the layer that
+turns counts into sentences. **No migration, no `PARSER_VERSION` bump, no
+reparse**: every figure comes from `kill_events`, `knock_events` and
+`participants` as they already stand.
+
+The split against `/strategy` is deliberate. Strategy aggregates the whole
+archive to ask "what do we do differently when we place well". Review is about
+specific evenings and specific deaths. Putting both on one page would have left
+Strategy half-empty and duplicated its filters.
+
+### The rule the findings layer exists to enforce
+
+Every finding carries its `n`, and `n` is not optional. No p-values, no
+significance stars, no confidence intervals — at ten matches a side an interval
+is either ignored or misread as precision. No causal or prescriptive phrasing;
+`findings.test.ts` fails on a regex of `because|therefore|you should|try to|…`,
+because the ceiling this data supports is "in these matches, X looked like Y".
+
+Findings below `MIN_N` are **dropped, not hedged** — a sentence with a caveat
+still reads as a finding, an absent sentence does not.
+
+### Four things measured before anything was built
+
+* **Third-partying is real signal**: 44 of 195 tracked deaths (23%) had another
+  team's kill within 200 m in the 30 s before. Both thresholds are a judgement
+  call, so they are returned by the API and printed in the sentence.
+* **"Died in the blue" cannot be a category**: 6 of 195. It ships as a bare
+  count in a footnote. A tile that small on a page of percentages reads as a
+  problem the squad has.
+* **Kill distance is concentrated**: 162 of 238 tracked kills inside 50 m, and
+  the bands above 150 m are single digits. Each band prints its own totals and
+  the trade percentage is withheld below n=8.
+* **The bot share had gone stale in CLAUDE.md** — see §29.2.
+
+### 29.1 A tunable constant was about to become a wrong number
+
+Knock-to-kill conversion was first written the obvious way: the victim's next
+death within N seconds of the knock. The answer moves **50% → 68% as N sweeps
+30–180 s**, with no knee anywhere in between, because a revived player who dies
+again ten minutes later is indistinguishable in that join from a slow
+bleed-out. Excluding re-knocks tightens the median from 19 s to 11.8 s and does
+not fix the tail (p99 871 s).
+
+`kill_events.dbno_maker_account_id` is the same question **already answered by
+the parser**, with no threshold at all — it is NULL exactly when nobody had
+knocked the victim first, and is populated on 4,716 of 8,289 career kills,
+matching the ~51% of victims who die still flagged `isDBNO`.
+
+Window-free result: we finish **122 of 200** knocks (61.0%); opponents finish
+**112 of 182** against us (61.5%). The first framing of this, from the naive
+join, read as an asymmetry — 72% against 73% — and it is not one. Two numbers
+half a point apart are the same number, and `findings.ts` says "the same rate,
+within noise" with a test pinning it.
+
+The same column replaced the "knocked, then finished" vs "killed outright"
+split, which had been about to acquire a window of its own.
+
+**Where a column like that exists, use it.** A tunable constant inside a rate
+is a place for a plausible wrong number to live.
+
+### 29.2 CLAUDE.md's bot-kill claim did not survive the archive growing
+
+It read "bots are ~19% of all kills and just over half of the tracked players'".
+At 97 matches: bots are **14.0% of all participants** (1,265/9,041), **6.7%** of
+official-match ones (545/8,116), **6.6% of official kill victims** (545/8,289),
+and **11% of the tracked players' kills** (27/238). The 19% came from the
+65-match corpus. `kills_human` stays the default — that decision is right
+independently of the ratio — but the ratio itself is now marked as something to
+re-measure rather than quote.
+
+(545 appearing twice above is a real coincidence, checked with separate
+queries, not a copy-paste.)
+
+### 29.3 Tone is only claimed where the data says which way is better
+
+The first build coloured a 38% revive rate red. Nothing in this app defines a
+good revive rate, so that was inventing a standard and then failing the squad
+against it. Tone is now neutral there and everywhere else without a reference
+point; it survives on a losing trade ratio, which is self-evident from the
+counts. Two tests pin it.
+
+### 29.4 `scripts/probe-page.mjs`
+
+Third sibling of `probe-replay.mjs` and `probe-map.mjs`. Those two are
+specific — one drives Pixi, one drags a map — and there was no probe for "did
+this ordinary page come up". It reports page errors, failed requests, the
+section/table/tile structure, whether the body scrolls sideways, and exits
+non-zero if anything threw.
+
+It caught nothing this time, which is the point: the CSS-leak check
+(load `/review`, then navigate in-session to Overview, Matches and Strategy and
+confirm their rows keep their own layout) is the exact sequence that hid the
+`.feed-row` collision in §15, and it is now a thing that can be run in seconds
+rather than reasoned about.
+
+### Verified
+
+Backend `882 passed, 1 skipped` (the pre-existing missing-fixture skip in
+`test_schemas.py`, §11). `ruff` clean. Frontend `npm run check` green —
+158 tests across 12 files, 31 of them new in `findings.test.ts`. Built, then
+probed in a real browser against the deployed `dist/`.
+
+Numbers on the live page match the independent measurements exactly: 83
+official matches, 195 deaths, 44 third-partied, 122/200 and 112/182 knocks,
+first-down 32/71, 28/71, 11/38.

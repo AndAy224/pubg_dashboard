@@ -495,3 +495,83 @@ export interface StrategyBaseline {
   placeMax: number | null
 }
 
+
+// ---------------------------------------------------------------------------
+// review
+// ---------------------------------------------------------------------------
+
+/** A count over a denominator, never pre-divided.
+ *
+ *  Both halves travel so the UI can print "122 of 200" rather than "61%".
+ *  `pct` is null when `total` is 0 — **never 0**, which would read as a real
+ *  measured zero rather than as an absence of data. */
+export interface Rate {
+  n: number
+  total: number
+  pct: number | null
+}
+
+export interface KnockConversion {
+  /** Knocks we landed on humans, and how many became kills. */
+  made: Rate
+  /** Knocks landed on us, and how many became deaths. */
+  taken: Rate
+}
+
+export interface FirstDeathRow {
+  accountId: string
+  name: string
+  diedFirst: number
+  /** Matches with at least two tracked players on the roster — solo and
+   *  duo-with-strangers matches are excluded, because "first" needs a squad. */
+  squadMatches: number
+}
+
+export interface RangeBandRow {
+  loM: number
+  /** Null on the open-ended top band. */
+  hiM: number | null
+  weKilled: number
+  weDied: number
+}
+
+export interface DeathCauseRow {
+  cause: string
+  n: number
+  label: string
+}
+
+export interface SquadReview {
+  matches: number
+  deaths: number
+  thirdParty: Rate
+  /** The thresholds behind `thirdParty`, travelling with it: they are a
+   *  judgement call, and a rate printed without its window claims more than it
+   *  knows. */
+  thirdPartyRadiusM: number
+  thirdPartyWindowS: number
+  knocks: KnockConversion
+  firstDeaths: FirstDeathRow[]
+  rangeBands: RangeBandRow[]
+  /** **Not mutually exclusive** — a death can be third-partied *and* early
+   *  *and* preceded by a knock. Only `knocked_first` + `outright` partition. */
+  deathCauses: DeathCauseRow[]
+  /** Blue-zone deaths. A bare count, never a `deathCauses` bucket: 6 in 195
+   *  measured, which is a footnote, not a category the squad has a problem
+   *  with. */
+  zoneDeaths: number
+}
+
+export interface SessionRow {
+  startedAt: string
+  endedAt: string
+  matches: number
+  bestPlace: number
+  wins: number
+  top10: number
+  kills: number
+  deaths: number
+  damage: number
+  /** Placement of each match, newest first. */
+  places: number[]
+}

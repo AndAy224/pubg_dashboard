@@ -35,6 +35,10 @@ const PAGE_SCOPES: Record<string, { prefix: string; unscoped: string[] }> = {
     prefix: '.strategy',
     unscoped: [],
   },
+  'Review.css': {
+    prefix: '.review',
+    unscoped: [],
+  },
 }
 
 /** Strip comments, then yield every selector in the sheet. */
