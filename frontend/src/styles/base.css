@@ -359,3 +359,36 @@ code { font-family: var(--mono); background: var(--bg-inset); padding: 1px 5px; 
    the "look at this soon" step below it — a stale watchdog is not yet a
    problem, it is the loss of the ability to see one. */
 .warn { color: var(--accent); }
+
+/* --- Match: circle discipline pips ---------------------------------------- */
+/* Global rather than page-scoped because `pages/Match.tsx` has no stylesheet
+   of its own — it renders on the shared classes above. Prefixed `pip-`/
+   `circle-pips` so it cannot collide with `.strategy .circle-*`, which
+   `styles/css-scope.test.ts` also checks across files. */
+
+.circle-pips { margin-top: 14px; }
+
+.pip-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 0;
+  font-size: 12px;
+}
+
+.pip-row .name { width: 120px; flex: none; }
+
+.pip {
+  width: 13px; height: 13px; border-radius: 2px;
+  border: 1px solid var(--border);
+  display: inline-block;
+}
+
+/* Inside the next circle when the blue started moving. */
+.pip.in { background: var(--accent); border-color: var(--accent); }
+/* Alive and outside it — hollow, so a row of misses reads as absence. */
+.pip.out { background: transparent; border-color: var(--bad); }
+/* Already out of the match. Deliberately not styled like "outside": a dead
+   player is not out of position, and colouring them the same would make a
+   short match look like bad rotation. */
+.pip.gone { background: var(--bg-inset); border-style: dashed; opacity: .5; }

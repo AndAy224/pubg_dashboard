@@ -32,6 +32,7 @@ from pubg_dashboard.db.models import (
     Participant,
     ParticipantWeapon,
     StrategyMetric,
+    ZonePlay,
     utcnow,
 )
 from pubg_dashboard.telemetry.parse import ParseResult
@@ -92,6 +93,11 @@ async def persist_parse_result(
     await session.execute(delete(KnockEvent).where(KnockEvent.match_id == match_id))
     for chunk in _chunks(result.knock_rows):
         await session.execute(pg_insert(KnockEvent).values(chunk))
+
+    # --- zone_play: same shape, same reasoning -----------------------------
+    await session.execute(delete(ZonePlay).where(ZonePlay.match_id == match_id))
+    for chunk in _chunks(result.zone_play_rows):
+        await session.execute(pg_insert(ZonePlay).values(chunk))
 
     # --- participant_weapons: same shape, same reasoning --------------------
     await session.execute(

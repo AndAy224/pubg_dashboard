@@ -777,3 +777,74 @@ class Gazetteer(ApiModel):
     matches: int
     samples: int
     modal_purity: float
+
+
+# ---------------------------------------------------------------------------
+# zone play — circle discipline
+# ---------------------------------------------------------------------------
+class ZonePhaseRate(ApiModel):
+    """In-circle rate for one phase, for one population.
+
+    Both instants travel because they are different questions: at the announce
+    "were we already where the circle landed", at the close "did we make it
+    before the blue started moving". The close is the rotation deadline.
+
+    `n` is **per instant**, not shared — a match can end on an announcement
+    that never closes, so the two denominators genuinely differ.
+    """
+
+    phase: int
+    announce_in: int
+    announce_n: int
+    close_in: int
+    close_n: int
+    #: Median signed distance to the circle edge at the close, metres.
+    #: **Negative is inside.** Null when no row in this phase had a usable
+    #: position sample.
+    median_edge_m: float | None
+
+
+class ZonePlaySummary(ApiModel):
+    """Circle discipline per phase, squad against the rest of the lobby.
+
+    The lobby side is free: `zone_play` has a row for every participant
+    because the parser walks the whole match anyway. Bots are excluded — they
+    do not rotate, and a baseline including them would flatter any human
+    against a lobby that does not exist.
+    """
+
+    squad: list[ZonePhaseRate]
+    lobby: list[ZonePhaseRate]
+    matches: int
+    excludes_bots: bool = True
+    #: Placement band the lobby side was narrowed to, if any. Turns "what
+    #: everyone does" into "what the people who beat us do".
+    place_max: int | None = None
+
+
+class ZonePlayRow(ApiModel):
+    """One player's phase in one match — the per-match debrief shape."""
+
+    phase: int
+    announce_t_s: float | None
+    close_t_s: float | None
+    in_circle_at_announce: bool | None
+    in_circle_at_close: bool | None
+    dist_to_white_edge_cm: float | None
+    white_r_cm: float | None
+    alive_at_close: bool | None
+    in_vehicle_at_close: bool | None
+    sample_lag_ms: int | None
+
+
+class MatchZonePlay(ApiModel):
+    """Circle discipline for one match's tracked players.
+
+    `max_phase` is the match's own phase count, taken across **every**
+    participant rather than the tracked ones — otherwise a squad wiped in
+    phase 1 would render as a one-phase match, and "we died early" would look
+    identical to "the match was short".
+    """
+
+    max_phase: int
+    players: dict[str, list[ZonePlayRow]]

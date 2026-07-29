@@ -522,6 +522,67 @@ class StrategyMetric(Base):
     )
 
 
+class ZonePlay(Base):
+    """Where one player stood when one zone phase moved (parser v15).
+
+    Derived by `telemetry/zoneplay.py`, delete-then-insert on `match_id` like
+    `strategy_metrics` — absolute per-match facts, no ledger involved.
+
+    `LogPhaseChange` fires **twice per phase** and `common.isGame` separates
+    the two exactly: `phase - 0.5` (or `0.1` for phase 1) announces the white
+    circle, `phase` is the moment the blue starts closing on it. The close is
+    the rotation deadline; the announce is when you first knew where to go.
+
+    Rows exist for every participant, bots included, so a lobby baseline —
+    "were the teams that beat us inside at phase 4?" — is free. Filtering is a
+    query-time join on `participants.is_bot`.
+
+    **A phase the player never saw has no row**, rather than a row of nulls:
+    "dead before phase 6" and "alive outside the circle at phase 6" are
+    different facts and must not collapse into the same shape.
+    """
+
+    __tablename__ = "zone_play"
+
+    match_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("matches.match_id", ondelete="CASCADE"), primary_key=True
+    )
+    # No FK, same reason as participants: bot ids are match-scoped.
+    account_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    phase: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    #: Seconds from t0. Either may be NULL — a match can end on an
+    #: announcement that never closes (6 of 184 phases measured).
+    announce_t_s: Mapped[float | None] = mapped_column(Float)
+    close_t_s: Mapped[float | None] = mapped_column(Float)
+
+    #: Straight from `playersInWhiteCircle` — **exact**, not derived from
+    #: position. NULL means that half of the pair never fired, which is not
+    #: the same as False.
+    in_circle_at_announce: Mapped[bool | None] = mapped_column(Boolean)
+    in_circle_at_close: Mapped[bool | None] = mapped_column(Boolean)
+
+    #: Geometry at the close, from the ~10 s position track. Signed on the
+    #: edge: **negative is inside**, so one column orders from "deep in the
+    #: circle" to "far outside it".
+    dist_to_white_centre_cm: Mapped[float | None] = mapped_column(Float)
+    dist_to_white_edge_cm: Mapped[float | None] = mapped_column(Float)
+    white_r_cm: Mapped[float | None] = mapped_column(Float)
+
+    alive_at_close: Mapped[bool | None] = mapped_column(Boolean)
+    in_vehicle_at_close: Mapped[bool | None] = mapped_column(Boolean)
+    #: Staleness of the position sample the geometry was read from. The
+    #: cadence is ~10 s, so this is how much to trust the distances — and it
+    #: is what explains a disagreement with `in_circle_at_close` rather than
+    #: leaving one to be tolerated blindly.
+    sample_lag_ms: Mapped[int | None] = mapped_column(Integer)
+
+    __table_args__ = (
+        # "This player's phases across matches" — the strategy page's scan.
+        Index("ix_zone_play_account", "account_id", "match_id"),
+    )
+
+
 class KnockEvent(Base):
     """One `LogPlayerMakeGroggy`, in SQL for the same reason kills are.
 

@@ -14,6 +14,7 @@ import { Place, Skeleton } from '../components/ui'
 import { dateTime, distance, duration, gameMode, num, weaponName } from '../lib/format'
 import { contrastByPlacement, mergeWeapons, type Contrast } from '../lib/strategy'
 import { playerColourHex, registerPlayers } from '../lib/players'
+import { StrategyCircle } from './StrategyCircle'
 import { StrategyDrops } from './StrategyDrops'
 import './Strategy.css'
 
@@ -282,6 +283,8 @@ export function Strategy() {
           ))}
         </div>
       )}
+
+      <StrategyCircle />
 
       <StrategyDrops maps={maps.data} />
 

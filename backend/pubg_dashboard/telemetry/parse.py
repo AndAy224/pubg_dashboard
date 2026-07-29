@@ -51,6 +51,7 @@ from pubg_dashboard.telemetry.maps import world_size
 from pubg_dashboard.telemetry.reader import load, norm, ts_ms
 from pubg_dashboard.telemetry.strategy import compute_strategy
 from pubg_dashboard.telemetry.world import WorldTracker, is_crate_rare
+from pubg_dashboard.telemetry.zoneplay import compute_zone_play
 
 log = structlog.get_logger(__name__)
 
@@ -94,6 +95,7 @@ class ParseResult:
     weapon_rows: list[dict[str, Any]]
     knock_rows: list[dict[str, Any]]
     strategy_rows: list[dict[str, Any]]
+    zone_play_rows: list[dict[str, Any]]
     unknown_events: dict[str, int] = field(default_factory=dict)
     duration_ms: int = 0
 
@@ -230,6 +232,13 @@ def parse_telemetry(
             world=world,
             combat=combat,
             inventory=inventory,
+            teams={a: r.team_id for a, r in roster.items()},
+            t0_ms=meta.t0_ms,
+        ),
+        zone_play_rows=compute_zone_play(
+            match_id=match_id,
+            frames=frames,
+            world=world,
             teams={a: r.team_id for a, r in roster.items()},
             t0_ms=meta.t0_ms,
         ),

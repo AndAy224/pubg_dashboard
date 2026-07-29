@@ -1922,3 +1922,140 @@ files, 30 new across `drops.test.ts`, `drops.corpus.test.ts` and
 `test_gazetteer.py`'s 24. Built, then driven in a real browser: 13 rows render,
 clicking a marker selects its row, and the row opens 25 replay links at the
 landing timestamps.
+
+---
+
+## 31. Circle discipline — parser v15, added 2026-07-29
+
+**What**: a `zone_play` table (migration 0009), a "Circle discipline" section on
+`/strategy` showing the squad's in-circle rate per phase against the rest of the
+lobby, and a row of per-phase pips on the match page. All 97 matches reparsed.
+
+**This is the one metric in the app with no heuristic in it at all.**
+`LogPhaseChange` carries `playersInWhiteCircle` — PUBG's own roster of who was
+inside — so "were we in the circle" needs no geometry, no radius maths and no
+threshold. `strategy_metrics.rotate_lag_s` infers a nearby answer from position
+samples; this one is read off the wire.
+
+### 31.1 The phase pair, settled exactly
+
+§26's correction established that `LogPhaseChange` fires twice per phase and
+that "the first reports the whole lobby" was false. What separates them is
+`common.isGame`:
+
+```
+isGame - phase   ->  -0.9: 23    -0.5: 161    0.0: 178      (362 events, 23 matches)
+```
+
+Three values, no exceptions. `isGame == phase - 0.5` is the announcement,
+`isGame == phase` is the close, and phase 1's announcement is the `-0.9` case —
+it carries `isGame == 0.1`, the **plane phase**, which is why its roster is
+large: the lobby is still airborne over the circle. The earlier event is the
+announcement in **178 of 178** complete pairs.
+
+`isGame` is literally `0.10000000149011612` on the wire, so `phase_kind` is
+tolerance-compared. An exact `== 0.1` would misfile every phase 1 as a close.
+
+**What the two instants mean, from the radii rather than the timings**: at
+phase 2's announce the blue reads 1921 m and the new white 1056 m; eighty
+seconds later at the close the blue reads **1835 m** — it has *started*
+shrinking, not finished. So the close is the rotation deadline, and the
+announce is when you first knew where to go. Both are stored.
+
+6 of 184 phases have no close: a match can end on an announcement. Do not
+assume pairs.
+
+### 31.2 Two bugs, both of which produced plausible output
+
+**The time bases differ.** `Sample.t_ms` is **absolute epoch milliseconds**;
+`PhaseChange.t_s` is **seconds relative to t0**. The first version compared
+them directly, so no sample was ever within any window — and the failure was
+silent. Rows still appeared, `in_circle_*` was still correct because it comes
+from the roster, and every geometry column was quietly NULL. It looked like
+working output.
+
+**The circle was read at the wrong instant.** `white_circle_at` snaps to the
+last periodic sample *at or before* the time asked for, and the announcement
+fires in the same second the white circle updates — so asking at the announce
+returns the **previous** phase's circle about half the time.
+
+That one was caught by the shape of the residual, not by the rate. Roster and
+geometry agreed on only 52% of rows, and **the disagreements sat at *lower*
+sample lag than the agreements** (1206 ms against 2441 ms). Staleness cannot
+produce that: if the position track were merely old, disagreements would
+cluster at high lag. Reading the circle at the close instead:
+
+| | agree | disagree median lag | agree median lag |
+|---|---:|---:|---:|
+| before | 52.4% | 1206 ms | 2441 ms |
+| after | **96.7%** | 3678 ms | 1775 ms |
+
+Both numbers moved the right way, and the residual now behaves like staleness.
+`tests/test_telemetry_zoneplay.py` asserts both the rate **and** that
+disagreements are concentrated at higher lag — the second is what would catch a
+wrong transform, since a wrong circle still draws a perfectly plausible one.
+
+### 31.3 `playersInWhiteCircle` is trustworthy
+
+Checked directly against raw `LogPlayerPosition`: of the players PUBG names as
+inside the white circle, **155 of 156 are genuinely within the radius**. The
+roster is right; the first 52% was our geometry, not PUBG's.
+
+### 31.4 Phase 1 looks degenerate and is not
+
+For the tracked squad, `in_circle_at_announce` and `in_circle_at_close` are
+identical on all 122 phase-1 rows. That is real, not a bug:
+
+* alive at the close, phase 1 — **3.6%** of rows differ (200 of 5,580)
+* **not** alive at the close, phase 1 — **85%** differ (1,302 of 1,526)
+
+The first circle is 1,921 m across and nobody moves far in four minutes of
+looting, so a living player who landed inside is still inside. The squad shares
+one drop decision per match, so 68 correlated matches with no difference is
+unremarkable. The 85% for the dead is the plane roster at 91 s versus being
+eliminated by 330 s.
+
+### 31.5 What it says
+
+Only players **alive at the close** count — a dead player is out of the match,
+not out of position, and counting them would make discipline look worse the
+more the squad lost.
+
+| phase | announced | blue moves | lobby at the deadline |
+|---:|---:|---:|---:|
+| 2 | 20% /91 | 40% /91 | 39% /3065 |
+| 3 | 49% /75 | 61% /75 | 45% /2492 |
+| 4 | 33% /58 | 41% /58 | **47%** /1821 |
+| 5 | 31% /35 | 34% /35 | **52%** /1147 |
+
+The squad leads the lobby early and falls behind from phase 4. `lib/zone.ts`
+states that in a sentence with both rates and the n, and **returns null when
+there is no measurable gap** — the absence of one is not evidence of good
+discipline, and a reassuring sentence would claim it is. Phase 4's five-point
+gap is below the threshold and deliberately gets no sentence.
+
+### 31.6 Reparse
+
+`PARSER_VERSION` 14 -> 15, all 97 matches, no re-download. **No bundle change**,
+so no replay needed re-rendering. Verified before and after:
+
+| | before | after |
+|---|---:|---:|
+| `heatmap_bins` rows | 750,359 | 750,359 |
+| `heatmap_bins` total | 2,214,264 | 2,214,264 |
+| `kill_events` | 9,275 | 9,275 |
+| `knock_events` | 7,489 | 7,489 |
+| `strategy_metrics` | 9,309 | 9,309 |
+| `participant_weapons` | 15,640 | 15,640 |
+| `zone_play` | 0 | 20,503 |
+
+Then reparsed **a second time** with `staleOnly=false` and every count above was
+identical — including `zone_play`. That is the check worth running: these tables
+have no ledger, so a double-insert would be silent.
+
+### Verified
+
+Backend suite green, `ruff` clean, migration 0009 inspected by hand (a plain
+B-tree index, so nothing goes in `HAND_MANAGED_INDEXES`). Frontend
+`npm run check` green — 206 tests across 15 files. Built, then driven in a real
+browser: eight phase panels, the finding sentence, and the match page's pips.

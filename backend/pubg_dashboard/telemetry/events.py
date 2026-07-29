@@ -128,6 +128,40 @@ def is_in_play(is_game: float | int | None) -> bool:
     return is_game is not None and float(is_game) >= IN_PLAY_IS_GAME
 
 
+#: `LogPhaseChange` fires **twice per phase**, and `common.isGame` says which
+#: is which: `phase - 0.5` announces the white circle, `phase` is the moment
+#: the blue starts closing on it. Measured over 362 events in 23 matches with
+#: zero exceptions, and the earlier of the pair is the announcement in 178 of
+#: 178 complete pairs.
+PHASE_ANNOUNCE: Final = "announce"
+PHASE_CLOSE: Final = "close"
+
+
+def phase_kind(phase: int, is_game: float | int | None) -> str:
+    """Which half of a phase pair a `LogPhaseChange` is.
+
+    Tolerance-compared, for the reason `PLANE_PHASE_IS_GAME` documents: phase
+    1's announcement carries `isGame == 0.10000000149011612`, so an exact
+    `== 0.1` never matches and every phase 1 would be misfiled as a close.
+
+    Defaults to `PHASE_CLOSE` on a missing or unexpected value. That is the
+    conservative direction — the close is the rotation deadline and the more
+    useful of the two — but a run where *everything* lands on `close` means
+    the field moved, which is what the corpus test asserts against.
+    """
+    if is_game is None:
+        return PHASE_CLOSE
+    value = float(is_game)
+    if abs(value - float(phase)) < IS_GAME_TOLERANCE:
+        return PHASE_CLOSE
+    if abs(value - (float(phase) - 0.5)) < IS_GAME_TOLERANCE:
+        return PHASE_ANNOUNCE
+    # Phase 1's announcement is the plane phase rather than 0.5.
+    if is_plane_phase(value):
+        return PHASE_ANNOUNCE
+    return PHASE_CLOSE
+
+
 def unwrap_character(obj: Mapping[str, Any] | None) -> Mapping[str, Any] | None:
     """Return the `Character` inside a possible `CharacterWrapper`.
 

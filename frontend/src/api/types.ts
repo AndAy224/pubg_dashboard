@@ -625,3 +625,56 @@ export interface Gazetteer {
   samples: number
   modalPurity: number
 }
+
+// ---------------------------------------------------------------------------
+// zone play — circle discipline
+// ---------------------------------------------------------------------------
+
+/** In-circle rate for one phase.
+ *
+ *  Both instants travel because they answer different questions: at the
+ *  **announce**, "were we already where the circle landed"; at the **close**,
+ *  "did we make it before the blue started moving". The close is the rotation
+ *  deadline. `n` is per instant — a match can end on an announcement that never
+ *  closes, so the two denominators genuinely differ. */
+export interface ZonePhaseRate {
+  phase: number
+  announceIn: number
+  announceN: number
+  closeIn: number
+  closeN: number
+  /** Median signed distance to the circle edge at the close, metres.
+   *  **Negative is inside.** Null when no row had a usable position sample. */
+  medianEdgeM: number | null
+}
+
+export interface ZonePlaySummary {
+  squad: ZonePhaseRate[]
+  lobby: ZonePhaseRate[]
+  matches: number
+  excludesBots: boolean
+  placeMax: number | null
+}
+
+/** Circle discipline for one match's tracked players.
+ *
+ *  `maxPhase` is the match's own phase count, across **every** participant —
+ *  a squad wiped in phase 1 has rows for phase 1 only, and using their own
+ *  maximum would make "we died early" look like "the match was short". */
+export interface MatchZonePlay {
+  maxPhase: number
+  players: Record<string, ZonePlayRow[]>
+}
+
+export interface ZonePlayRow {
+  phase: number
+  announceTS: number | null
+  closeTS: number | null
+  inCircleAtAnnounce: boolean | null
+  inCircleAtClose: boolean | null
+  distToWhiteEdgeCm: number | null
+  whiteRCm: number | null
+  aliveAtClose: boolean | null
+  inVehicleAtClose: boolean | null
+  sampleLagMs: number | null
+}

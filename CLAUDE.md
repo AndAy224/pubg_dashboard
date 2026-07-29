@@ -301,12 +301,33 @@ Full list: BUILD-SPEC §6 (34 of them) and HANDOFF §5. The ones that bite most:
   in three package ids and `Carepackage` in a fourth, so match a lowercased
   **substring**, never equality.
 - **`common.isGame == 0.1` is never true**; the wire value is
-  `0.10000000149011612`. Compare with tolerance. Gates plane-phase detection
-  and the movement heatmap.
+  `0.10000000149011612`. Compare with tolerance. Gates plane-phase detection,
+  the movement heatmap, and the phase-pair split below.
+- **`LogPhaseChange` fires twice per phase, and `common.isGame` says which is
+  which.** `isGame == phase - 0.5` is the white-circle **announcement**;
+  `isGame == phase` is the moment the blue **starts** closing on it — measured
+  from the radii, 1921 m -> 1835 m one sample later, not "finished closing".
+  362 events over 23 matches, three values, no exceptions; the earlier event is
+  the announcement in 178 of 178 pairs. Phase 1's announcement is the special
+  case at `isGame == 0.1`, during the plane phase. 6 of 184 phases have no
+  close — a match can end on an announcement, so never assume pairs.
+  `playersInWhiteCircle` is trustworthy: 155 of 156 named players are genuinely
+  inside the radius.
 - **`LogItemDrop` never fires on death.** The victim emits a `LogItemDetach`
   burst at +0s and a `LogItemUnequip` burst at **exactly +60s**. Suppress item
   events after an account's **final** death — a player can die twice, and seven
   in the corpus died three times.
+- **`Sample.t_ms` is absolute epoch milliseconds; most other parser times are
+  seconds relative to t0.** `PhaseChange.t_s`, `KillEvent.t_s` and the zone
+  samples are all relative. Comparing the two directly matches nothing and
+  **fails silently** — `zoneplay.py` shipped rows with every geometry column
+  quietly NULL on its first run, and the roster-derived columns beside them
+  were correct, so the output looked fine.
+- **`world.white_circle_at` snaps to the last sample at or before the time
+  asked for**, and a phase announcement fires in the same second the white
+  circle updates — so asking at the announce returns the *previous* circle
+  about half the time. Ask at the close, where the circle is constant until
+  the next announcement.
 - **`y` is not inverted** (origin top-left, like canvas), and the
   `8160/8192` correction applies **only** to 816000-cm maps. Both verified
   against the map's own printed town names.

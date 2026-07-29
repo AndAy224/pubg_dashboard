@@ -124,3 +124,122 @@
     overflow-x: auto;
   }
 }
+
+/* --- circle discipline --------------------------------------------------- */
+
+.strategy .circle .note {
+  font-size: 12px;
+  max-width: 82ch;
+  line-height: 1.5;
+  margin-bottom: 12px;
+}
+
+.strategy .phase-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(230px, 100%), 1fr));
+  gap: 10px;
+}
+
+.strategy .phase-panel {
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 10px 12px;
+}
+
+.strategy .phase-panel h4 {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.strategy .phase-panel .edge {
+  font-size: 11px;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  margin-left: auto;
+}
+
+.strategy .pbar-row {
+  display: grid;
+  grid-template-columns: 62px 1fr 62px;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+
+.strategy .pbar-label {
+  text-align: right;
+}
+
+.strategy .pbar-track {
+  height: 9px;
+  background: var(--bg);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.strategy .pbar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+}
+
+/* The announce bar is deliberately dimmer than the close bar: being outside
+   when the circle appears is normal, and equal weight would read as two
+   equally important failures. */
+.strategy .pbar-fill.announce {
+  background: var(--text-faint);
+}
+.strategy .pbar-fill.close {
+  background: var(--accent);
+}
+.strategy .pbar-fill.lobby {
+  background: var(--info);
+}
+
+.strategy .pbar-value {
+  text-align: right;
+  font-size: 11px;
+}
+
+.strategy .circle-legend {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  font-size: 12px;
+}
+
+.strategy .circle-sw {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  display: inline-block;
+  margin-right: 5px;
+  vertical-align: -1px;
+}
+.strategy .circle-sw.announce {
+  background: var(--text-faint);
+}
+.strategy .circle-sw.close {
+  background: var(--accent);
+}
+.strategy .circle-sw.lobby {
+  background: var(--info);
+}
+
+.strategy .circle-finding {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--bad);
+  border-radius: 3px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  font-size: 14px;
+  line-height: 1.5;
+}

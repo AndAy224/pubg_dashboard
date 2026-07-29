@@ -12,7 +12,8 @@ filters `is_bot` explicitly.
 
 from __future__ import annotations
 
-from typing import Annotated
+from collections.abc import Sequence
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Query
 from sqlalchemy import desc, func, select
@@ -21,12 +22,16 @@ from pubg_dashboard.api.deps import career_filter
 from pubg_dashboard.api.schemas import (
     BaselineMetric,
     MatchStrategyRow,
+    MatchZonePlay,
     SquadMatchRow,
     SquadPlayerCohesion,
     StrategyBaseline,
     StrategyMatchRow,
+    ZonePhaseRate,
+    ZonePlayRow,
+    ZonePlaySummary,
 )
-from pubg_dashboard.db.models import Match, Participant, Player, StrategyMetric
+from pubg_dashboard.db.models import Match, Participant, Player, StrategyMetric, ZonePlay
 from pubg_dashboard.db.session import SessionDep
 
 router = APIRouter(tags=["strategy"])
@@ -244,3 +249,147 @@ async def strategy_baseline(
             )
         )
     return StrategyBaseline(metrics=out, matches=matches, place_max=place_max)
+
+
+# ---------------------------------------------------------------------------
+# circle discipline (parser v15)
+# ---------------------------------------------------------------------------
+def _zone_rate_cols() -> list[Any]:
+    """Per-phase aggregates, counted separately per instant.
+
+    `count(col)` on a nullable boolean counts non-NULLs, which is exactly the
+    denominator wanted here — but it is spelled with an explicit FILTER so
+    nobody reads it as the row count. `count()` of a non-nullable column
+    proves nothing; that lesson cost this repo an entire accuracy feature.
+    """
+    return [
+        func.count().filter(ZonePlay.in_circle_at_announce.is_(True)),
+        func.count().filter(ZonePlay.in_circle_at_announce.is_not(None)),
+        func.count().filter(ZonePlay.in_circle_at_close.is_(True)),
+        func.count().filter(ZonePlay.in_circle_at_close.is_not(None)),
+        func.percentile_cont(0.5).within_group(ZonePlay.dist_to_white_edge_cm.asc()),
+    ]
+
+
+def _zone_rows(rows: Sequence[Any]) -> list[ZonePhaseRate]:
+    return [
+        ZonePhaseRate(
+            phase=int(phase),
+            announce_in=int(a_in or 0),
+            announce_n=int(a_n or 0),
+            close_in=int(c_in or 0),
+            close_n=int(c_n or 0),
+            median_edge_m=None if edge is None else float(edge) / 100.0,
+        )
+        for phase, a_in, a_n, c_in, c_n, edge in rows
+    ]
+
+
+@router.get("/strategy/zone-play", response_model=ZonePlaySummary)
+async def zone_play_summary(
+    session: SessionDep,
+    place_max: Annotated[int | None, Query(alias="placeMax", ge=1, le=100)] = None,
+) -> ZonePlaySummary:
+    """Were we inside the next circle, phase by phase — and was the lobby?
+
+    Straight from `LogPhaseChange.playersInWhiteCircle`, so "inside" needs no
+    geometry and carries no threshold. The two instants per phase are the
+    white-circle **announcement** and the moment the blue **starts closing**;
+    the second is the rotation deadline.
+
+    **Only rows where the player was alive at the close count.** A dead player
+    is not outside the circle, they are out of the match, and including them
+    would make late-phase discipline look worse the more the squad lost.
+    """
+    tracked = select(Player.account_id).where(Player.tracked).scalar_subquery()
+    career = select(Match.match_id).where(career_filter()).scalar_subquery()
+
+    base = (
+        select(ZonePlay.phase, *_zone_rate_cols())
+        .join(
+            Participant,
+            (Participant.match_id == ZonePlay.match_id)
+            & (Participant.account_id == ZonePlay.account_id),
+        )
+        .where(
+            ZonePlay.match_id.in_(career),
+            ZonePlay.alive_at_close.is_(True),
+        )
+        .group_by(ZonePlay.phase)
+        .order_by(ZonePlay.phase)
+    )
+
+    squad = (await session.execute(base.where(ZonePlay.account_id.in_(tracked)))).all()
+
+    lobby_where = [
+        Participant.is_bot.is_(False),
+        ZonePlay.account_id.not_in(tracked),
+    ]
+    if place_max is not None:
+        lobby_where.append(Participant.win_place <= place_max)
+    lobby = (await session.execute(base.where(*lobby_where))).all()
+
+    matches = (
+        await session.execute(
+            select(func.count(func.distinct(ZonePlay.match_id))).where(
+                ZonePlay.match_id.in_(career), ZonePlay.account_id.in_(tracked)
+            )
+        )
+    ).scalar_one()
+
+    return ZonePlaySummary(
+        squad=_zone_rows(squad),
+        lobby=_zone_rows(lobby),
+        matches=int(matches or 0),
+        place_max=place_max,
+    )
+
+
+@router.get("/matches/{match_id}/zone-play", response_model=MatchZonePlay)
+async def match_zone_play(session: SessionDep, match_id: str) -> MatchZonePlay:
+    """Per-phase rows for the tracked players in one match, keyed by name.
+
+    An empty `players` is a real answer — a match parsed before v15 has no
+    rows — and the frontend must not dress it up as an error.
+
+    `max_phase` is taken over **every** participant, not just the tracked
+    ones. A squad wiped in phase 1 has rows for phase 1 only, and using their
+    own maximum would render the match as one phase long — making "we died
+    early" indistinguishable from "the match was short".
+    """
+    max_phase = (
+        await session.execute(
+            select(func.max(ZonePlay.phase)).where(ZonePlay.match_id == match_id)
+        )
+    ).scalar_one_or_none()
+    rows = (
+        await session.execute(
+            select(Participant.name, ZonePlay)
+            .join(
+                Participant,
+                (Participant.match_id == ZonePlay.match_id)
+                & (Participant.account_id == ZonePlay.account_id),
+            )
+            .join(Player, Player.account_id == ZonePlay.account_id)
+            .where(ZonePlay.match_id == match_id, Player.tracked)
+            .order_by(Participant.name, ZonePlay.phase)
+        )
+    ).all()
+
+    players: dict[str, list[ZonePlayRow]] = {}
+    for name, zp in rows:
+        players.setdefault(name, []).append(
+            ZonePlayRow(
+                phase=zp.phase,
+                announce_t_s=zp.announce_t_s,
+                close_t_s=zp.close_t_s,
+                in_circle_at_announce=zp.in_circle_at_announce,
+                in_circle_at_close=zp.in_circle_at_close,
+                dist_to_white_edge_cm=zp.dist_to_white_edge_cm,
+                white_r_cm=zp.white_r_cm,
+                alive_at_close=zp.alive_at_close,
+                in_vehicle_at_close=zp.in_vehicle_at_close,
+                sample_lag_ms=zp.sample_lag_ms,
+            )
+        )
+    return MatchZonePlay(max_phase=int(max_phase or 0), players=players)

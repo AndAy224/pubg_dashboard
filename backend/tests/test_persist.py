@@ -77,6 +77,7 @@ def _result(
     strategy: int = 2,
     weapons: int = 2,
     knocks: int = 2,
+    zone_play: int = 2,
 ) -> ParseResult:
     return ParseResult(
         match_id="m1",
@@ -137,6 +138,18 @@ def _result(
                 "first_weapon_s": None, "early_pickups_n": None,
             }
             for i in range(strategy)
+        ],
+        zone_play_rows=[
+            {
+                "match_id": "m1", "account_id": f"account.v{i}", "phase": 1,
+                "announce_t_s": 90.0, "close_t_s": 330.0,
+                "in_circle_at_announce": i % 2 == 0, "in_circle_at_close": True,
+                "dist_to_white_centre_cm": 1000.0 * i,
+                "dist_to_white_edge_cm": 1000.0 * i - 5000.0,
+                "white_r_cm": 5000.0, "alive_at_close": True,
+                "in_vehicle_at_close": False, "sample_lag_ms": 1200,
+            }
+            for i in range(zone_play)
         ],
     )
 
@@ -303,3 +316,28 @@ async def test_weapon_rows_are_replaced_not_accumulated(session: AsyncSession) -
     )
     await session.commit()
     assert await session.scalar(sql("SELECT count(*) FROM participant_weapons")) == 1
+
+
+async def test_zone_play_rows_are_replaced_not_accumulated(session: AsyncSession) -> None:
+    """`zone_play` follows the same delete-then-insert shape (parser v15).
+
+    Absolute per-match facts, no ledger — so a reparse must *replace* the set,
+    not add to it. Nothing about a doubled `zone_play` would look wrong on the
+    page: an in-circle rate computed over twice as many identical rows is the
+    same percentage, so this is the only place the mistake is visible.
+    """
+    await persist_parse_result(
+        session, _result(zone_play=6), replay_key="r", heat_ledger_key="h",
+        previous_ledger=None, was_parsed=False, map_name=MAP, match_type=MATCH_TYPE, day=DAY,
+    )
+    await session.commit()
+    assert await session.scalar(sql("SELECT count(*) FROM zone_play")) == 6
+
+    ledger = [("movement", "account.a", "squad-fpp", i, 0, 5) for i in range(3)]
+    await persist_parse_result(
+        session, _result(zone_play=3), replay_key="r", heat_ledger_key="h",
+        previous_ledger=ledger, was_parsed=True, map_name=MAP, match_type=MATCH_TYPE, day=DAY,
+    )
+    await session.commit()
+    # Six, not nine: the shrink proves the delete ran.
+    assert await session.scalar(sql("SELECT count(*) FROM zone_play")) == 3

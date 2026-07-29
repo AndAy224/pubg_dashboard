@@ -164,7 +164,29 @@ BUNDLE_VERSION: Final = 1
 #:      alone is ambiguous; the nearest crate's `itemPackageId` matched the
 #:      pickup's `carePackageName` in 269 of 269. Emitted as `loot` on the `cp`
 #:      event; absent means nobody ever opened it, which is common and real.
-PARSER_VERSION: Final = 14
+#:
+#: 15 — circle discipline, in SQL. `LogPhaseChange` fires **twice per phase**
+#:      and `common.isGame` separates the two exactly: `phase - 0.5` (or `0.1`
+#:      for phase 1, the plane phase) announces the white circle, `phase` is
+#:      the moment the blue starts closing on it. Measured over 362 events in
+#:      23 matches with zero exceptions; the earlier event is the announcement
+#:      in 178 of 178 complete pairs.
+#:
+#:      HANDOFF said the first of the pair "reports the whole lobby" and
+#:      should be discarded. It does not — measured, the first is larger in
+#:      only 18 of 65 pairs. Confirmed from the radii rather than the timings:
+#:      at phase 2's announce the blue reads 1921 m and the new white 1056 m;
+#:      at the close the blue reads 1835 m, i.e. it has *started* shrinking,
+#:      not finished. So the close is the rotation deadline and the announce
+#:      is when you first knew where to go — two questions, both kept.
+#:
+#:      New `zone_play` table, one row per (account, phase). `in_circle_*`
+#:      comes straight from `playersInWhiteCircle` and needs no geometry;
+#:      the distances come from the ~10 s position track and carry
+#:      `sample_lag_ms` so a disagreement can be explained rather than
+#:      tolerated. **No bundle change** — the phase events already carried
+#:      everything, so replays do not need re-downloading or re-rendering.
+PARSER_VERSION: Final = 15
 
 DEFAULT_TICK_MS: Final = 100
 FALLBACK_TICK_MS: Final = 1000

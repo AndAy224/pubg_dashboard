@@ -2,7 +2,14 @@ import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router'
 import { apiBase, get } from '../api/client'
-import type { KillRow, MatchDetail, MatchStrategyRow, ParticipantRow, TileInfo } from '../api/types'
+import type {
+  KillRow,
+  MatchDetail,
+  MatchStrategyRow,
+  ParticipantRow,
+  TileInfo,
+  MatchZonePlay,
+} from '../api/types'
 import { KillMap } from '../components/KillMap'
 import { Place, Skeleton } from '../components/ui'
 import { dateTime, distance, duration, gameMode, num, weaponName } from '../lib/format'
@@ -34,6 +41,11 @@ export function Match() {
   const strategy = useQuery({
     queryKey: ['matchStrategy', matchId],
     queryFn: () => get<MatchStrategyRow[]>(`/matches/${matchId}/strategy`),
+    staleTime: Infinity,
+  })
+  const zone = useQuery({
+    queryKey: ['matchZonePlay', matchId],
+    queryFn: () => get<MatchZonePlay>(`/matches/${matchId}/zone-play`),
     staleTime: Infinity,
   })
 
@@ -111,6 +123,7 @@ export function Match() {
         <section className="card">
           <h3 style={{ marginBottom: 10 }}>Strategy</h3>
           <StrategyPanel rows={strategy.data} teamSize={m.teamSize} />
+          <CirclePanel zone={zone.data} />
         </section>
       )}
 
@@ -330,6 +343,61 @@ function zoneCause(k: KillRow): string {
  * A dash is "not measurable" (no landing, no teammates, no fights), never
  * zero — the distinction is the whole reason the API keeps these nullable.
  */
+/**
+ * Circle discipline for this match, one row of phase pips per player.
+ *
+ * Each pip is one phase at the **close** — the instant the blue starts moving,
+ * which is the rotation deadline. Filled means inside the next circle,
+ * straight from PUBG's `playersInWhiteCircle`; hollow means outside; a gap
+ * means the player was already out of the match.
+ *
+ * Nothing here is inferred from position, so there is no threshold to argue
+ * with and no dash meaning "not measurable" — only "did not reach this phase".
+ */
+function CirclePanel({ zone }: { zone: MatchZonePlay | undefined }) {
+  if (!zone) return null
+  const names = Object.keys(zone.players)
+  if (names.length === 0 || zone.maxPhase === 0) return null
+  // The **match's** phase count, not the squad's. A squad wiped in phase 1
+  // has rows for phase 1 only; using their own maximum would draw a
+  // one-pip row and make dying early look like a short match.
+  const maxPhase = zone.maxPhase
+
+  return (
+    <div className="circle-pips">
+      <div className="faint small" style={{ marginBottom: 6 }}>
+        Inside the next circle when the blue started closing, by phase
+      </div>
+      {names.map((name) => {
+        const byPhase = new Map(zone.players[name]!.map((r) => [r.phase, r]))
+        return (
+          <div key={name} className="pip-row">
+            <span className="name">{name}</span>
+            {Array.from({ length: maxPhase }, (_, i) => {
+              const row = byPhase.get(i + 1)
+              const state =
+                row === undefined || row.aliveAtClose !== true
+                  ? 'gone'
+                  : row.inCircleAtClose
+                    ? 'in'
+                    : 'out'
+              return (
+                <span
+                  key={i}
+                  className={`pip ${state}`}
+                  title={`phase ${i + 1}: ${
+                    state === 'gone' ? 'out of the match' : state === 'in' ? 'inside' : 'outside'
+                  }`}
+                />
+              )
+            })}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 function StrategyPanel({ rows, teamSize }: { rows: MatchStrategyRow[]; teamSize: number | null }) {
   const solo = teamSize === 1
   return (

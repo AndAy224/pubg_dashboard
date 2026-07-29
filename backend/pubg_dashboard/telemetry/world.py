@@ -149,10 +149,32 @@ class PhaseChange:
     Two edges when consuming this: phase 1's announcement fires at ~91 s while
     much of the lobby is still airborne over the circle, and a match can end on
     an announcement that never closes — so do not assume pairs.
+
+    `kind` separates the two exactly, from `common.isGame` rather than from the
+    gap between them: **`isGame == phase - 0.5` is the announcement and
+    `isGame == phase` is the close**, measured with zero exceptions over 362
+    events in 23 matches, and the earlier event is the announcement in 178 of
+    178 pairs. Phase 1's announcement is the one special case — it carries
+    `isGame == 0.1`, the plane phase, which is why its roster is large: the
+    lobby is still airborne over the circle.
+
+    What the two instants mean, confirmed from `safetyZone`/`poisonGasWarning`
+    radii rather than inferred from the timings:
+
+    * **announce** — the white circle for this phase has appeared. The blue is
+      still at the previous phase's radius.
+    * **close** — the blue has *started* shrinking toward it (1921 m -> 1835 m
+      one sample in). **Not** "finished closing"; the shrink runs on past this.
+
+    So `in_circle` at the close is the rotation deadline — "were we inside by
+    the time the blue started moving" — and at the announce it is "were we
+    already there when it appeared". Different questions, both worth having.
     """
 
     t_s: float
     phase: int
+    #: `"announce"` or `"close"`. See the class docstring.
+    kind: str = "close"
     in_circle: list[str] = field(default_factory=list)
 
 #: Spawn and land events share no id — `itemPackageId` is a class name, not an
@@ -265,10 +287,12 @@ class WorldTracker:
         if kind == norm(E.GAME_STATE_PERIODIC):
             self._game_state(event)
         elif kind == norm(E.PHASE_CHANGE):
+            phase = int(event.get("phase") or 0)
             self.phases.append(
                 PhaseChange(
                     t_s=self._rel(event),
-                    phase=int(event.get("phase") or 0),
+                    phase=phase,
+                    kind=E.phase_kind(phase, (event.get("common") or {}).get("isGame")),
                     in_circle=[
                         str(a) for a in (event.get("playersInWhiteCircle") or []) if a
                     ],
