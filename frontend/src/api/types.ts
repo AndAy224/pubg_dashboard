@@ -678,3 +678,59 @@ export interface ZonePlayRow {
   inVehicleAtClose: boolean | null
   sampleLagMs: number | null
 }
+
+// ---------------------------------------------------------------------------
+// engagements — the one payload whose rows are modelled
+// ---------------------------------------------------------------------------
+export interface EngagementResultRow {
+  /** `ours_only` | `theirs_only` | `both` | `neither`. */
+  key: string
+  /** Describes the kill counts and stops there. Never "won" or "lost" —
+   *  those are readings, and a third party can make either wrong. */
+  label: string
+  n: number
+}
+
+export interface EngagementRangeRow {
+  loM: number
+  /** Null on the open-ended top band. */
+  hiM: number | null
+  fights: number
+  weKilled: number
+  weDied: number
+}
+
+export interface EngagementPlayerRow {
+  accountId: string
+  name: string
+  fights: number
+  damageDealtAvg: number
+  /** The number that exists nowhere else in the schema: `participants` counts
+   *  damage dealt and `kill_events` records who died, so until this table the
+   *  only measure of a fight going badly was somebody losing it. */
+  damageTakenAvg: number
+  knocked: Rate
+  died: Rate
+}
+
+export interface SquadEngagements {
+  /** The grouping constant, in seconds. **A judgement call, not a wire
+   *  fact** — the sweep behind it found no knee from 5 s to 120 s, so it
+   *  travels with the payload and the page prints it. */
+  gapSeconds: number
+  thirdPartyRadiusM: number
+  matches: number
+  fights: number
+  /** Fights where somebody died. The denominator for the first-hit rates,
+   *  because a fight nobody lost has no side to be ahead on. */
+  decided: number
+  results: EngagementResultRow[]
+  firstHitOurs: Rate
+  aheadWhenFirst: Rate
+  /** The other half. Either rate alone invites reading a base rate as an
+   *  effect, so `engagements.ts` refuses to state one without the other. */
+  aheadWhenNotFirst: Rate
+  thirdParty: Rate
+  rangeBands: EngagementRangeRow[]
+  players: EngagementPlayerRow[]
+}

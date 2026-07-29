@@ -99,3 +99,31 @@
     overflow-x: auto;
   }
 }
+
+/* --- fights: the modelled section ---------------------------------------- */
+/* Visually set apart on purpose. Everything else on this page is a count of
+ * something PUBG recorded; these rows come from a grouping this codebase
+ * invents, and the block below says so before any number is read. */
+.review .modelled {
+  border-left: 3px solid var(--accent-warn, #c08a3e);
+  background: var(--bg-inset);
+  padding: 10px 14px;
+  margin: 0 0 16px;
+  border-radius: 0 4px 4px 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+.review .modelled strong {
+  color: var(--text);
+}
+
+.review .fights h3 {
+  margin: 22px 0 4px;
+  font-size: 14px;
+}
+
+.review .fight-players .name {
+  font-weight: 500;
+}

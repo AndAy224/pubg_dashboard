@@ -2059,3 +2059,264 @@ Backend suite green, `ruff` clean, migration 0009 inspected by hand (a plain
 B-tree index, so nothing goes in `HAND_MANAGED_INDEXES`). Frontend
 `npm run check` green — 206 tests across 15 files. Built, then driven in a real
 browser: eight phase panels, the finding sentence, and the match page's pips.
+
+---
+
+## 32. Fights — parser v16, added 2026-07-29
+
+Phase 4 of the gameplay-review plan. Two new tables, `engagements` and
+`engagement_participants` (migration 0010), a `Fights` section on `/review`,
+and `GET /api/review/engagements`.
+
+**This is the first derived output in the parser that is a model rather than a
+reading, and the whole design follows from admitting that.** Everything else
+`telemetry/` writes is something PUBG states: a kill, a knock, a
+`playersInWhiteCircle` roster, a position sample. PUBG does not record fights.
+An "engagement" is a grouping this codebase invents.
+
+### 32.1 The gap threshold, swept again and still with no knee
+
+The plan flagged this as the riskiest piece on a 6-match sweep. Re-run over 25
+matches and 3,922 → 12,600 cross-team blows, the shape is unchanged:
+
+```
+gap   5s -> 4559        gap  30s -> 2589
+gap  10s -> 3791        gap  45s -> 2249
+gap  15s -> 3311        gap  60s -> 2058
+gap  20s -> 2992        gap  90s -> 1890
+gap  25s -> 2762        gap 120s -> 1797
+```
+
+A smooth decay. 20 s versus 30 s is a **13% swing in the engagement count from
+a ten-second choice**, and there is no fight length hiding in the data waiting
+to be found.
+
+So the constant is treated as what it is:
+
+- `ENGAGEMENT_GAP_S` lives in `telemetry/engagements.py` with the sweep in its
+  docstring, and it is part of `PARSER_VERSION`;
+- `/api/review/engagements` **returns it** (`gapSeconds`), so the page prints
+  the real number rather than hard-coding 20 and disagreeing with the parser
+  the day someone changes one and not the other;
+- every sentence `lib/engagements.ts` produces that quotes a count of fights
+  carries the clause "grouped by a 20 s silence between the same two teams",
+  built once by `caveat()` so no card can forget it — and a vitest asserts
+  exactly that over every finding;
+- the section leads with a bordered block saying the rows are a model.
+
+`test_the_gap_has_no_knee` re-runs the sweep in CI and fails if a knee ever
+appears, because that would mean the constant had stopped being arbitrary and
+all of the above needs rewriting. Its anti-vacuous twin,
+`test_the_gap_actually_changes_the_answer`, fails if 20 s and 30 s ever stop
+differing — at which point the warnings would be noise and the constant could
+go.
+
+### 32.2 There is no `outcome` column, and that is the point
+
+The plan said `outcome` was "the column to cut first". It was cut before it was
+written. `won | lost | traded | broken_off` is a *reading* of `kills_a` and
+`kills_b`, and a stored verdict outlives the reasoning behind it: a fight where
+we killed two and lost three to a third party is not obviously ours to have
+lost.
+
+What is stored is the arithmetic — hits, damage, knocks and kills per side.
+The API derives four buckets at query time and names them after what they
+count: `ours_only` ("only they lost someone"), `theirs_only`, `both`,
+`neither`. Three tests keep it that way: one asserts no `outcome`-ish key is in
+the row dict, one asserts the API's labels contain no win/loss language, and a
+vitest asserts no rendered sentence does either.
+
+### 32.3 A death does not have to happen during the fight that caused it
+
+This was the real find, and it would have quietly broken the whole feature.
+
+`Damage_DBNO` bleed-out ticks are **self-attributed** — attacker == victim,
+`attackId: -1` — so `CombatTracker._damage` drops them under its self-damage
+guard and they produce no `Hit`. Measured across 25 matches: **on 16% of
+cross-team kills the credited killer's last attributed hit on that victim is
+20 s or more before the death**, reaching 122 s. Those are the players who were
+knocked, crawled away, and ran out.
+
+Segmenting on kills as well as hits would open a fresh one-event engagement for
+each of them, reading as "team A killed team B with no exchange" a minute after
+the fight that actually did it. So the exchange is built from **hits and knocks
+only** and kills are *attached* afterwards, by three rules in order:
+
+| rule | share at 20 s | threshold? |
+|---|---:|---|
+| the kill falls inside the exchange's span | 47.3% | exact |
+| `dbno_maker`'s knock is in the exchange | 29.3% | **none** — PUBG's own link |
+| the pair's last exchange, within the gap | 22.1% | reuses `ENGAGEMENT_GAP_S` |
+| nothing fits | 1.3% | counted, not dropped |
+
+The second rule is the same trick §29.1 used for knock conversion: where PUBG
+has already resolved the link, use it instead of inventing a window. It carries
+a median lag of 8 s past the end of the exchange, which no time-based rule
+could reach without also swallowing unrelated fights.
+
+The third turned out **not** to be a lookback at all — its median reach is
+sub-second. It exists because the fatal `LogPlayerTakeDamage` and the
+`LogPlayerKillV2` that follows are separate events a few milliseconds apart.
+
+The 1.3% that attach to nothing are kills whose credited killer never landed an
+attributed hit on the victim at all. They are counted in
+`ParseResult.unattached_kills` and logged per parse.
+`test_every_cross_team_kill_is_accounted_for` asserts attached + unattached
+equals every cross-team kill exactly, because a kill that silently vanished
+would make the fight review *kinder* than the match — the harder failure to
+notice.
+
+### 32.4 "Who landed the first blow", never "who opened the fight"
+
+`LogPlayerAttack` carries an attacker and a weapon and **no victim**. A shot
+that opened a fight and missed is attributable to nobody, so a team that fired
+first and missed appears in this data as the team that got shot at. No column
+can fix that.
+
+The mitigation is entirely in the naming, so it is enforced in three places:
+the column is `first_hit_account_id`, the docstrings say so, and a vitest bans
+`opened`, `started`, `initiated` and `engaged first` from every rendered
+sentence.
+
+The finding it supports, measured: **the side that lands the first blow ends
+ahead on kills in 75.9% of decided fights** (1,213 of 1,599). It is only ever
+stated as a pair with its complement — "76% when you land first, 25% when they
+do" — because a fight has one first hit and quoting either half alone turns a
+base rate into an apparent effect. `test_the_first_hit_split_covers_every_decided_fight`
+pins that the two halves genuinely partition, and a vitest refuses to emit the
+sentence when only one half is measurable.
+
+### 32.5 What an "engagement" actually is, most of the time
+
+Worth stating because the word oversells the rows. At 20 s over 25 matches:
+
+- median **4 events** and a median duration of **1.9 s**;
+- 50.2% ended in a death, 13.9% had a knock and no death;
+- **32.7% are one side landing hits and nothing coming of it** — somebody
+  plinking at range;
+- 12.9% had a third team fighting one of the two sides at the same time within
+  200 m;
+- ~120 engagements and ~338 participant rows per match, so ~11.6k and ~32.8k
+  rows over the archive — negligible beside `heatmap_bins`' 2.2M.
+
+`test_most_fights_are_small` pins it, and the page says it in words.
+
+### 32.6 `damage_taken` exists nowhere else in the schema
+
+`participants` records damage *dealt*; `kill_events` records who ended up dead.
+Until `engagement_participants` there was no way to say a player took 180
+damage and dealt 12 — the only measure of a fight going badly was somebody
+losing it.
+
+It is rendered as a contrast between two players and never as a judgement on
+one: taking more damage is what an entry fragger does on purpose, and nothing
+in the data says which of the two is playing badly. Same rule as §29.3.
+
+### 32.7 The third party is a third *team*, nearby, at the same time
+
+`third_party_team_id` is set when another exchange shares **exactly one** team
+with this one, overlaps it in time, and sits within 200 m. Sharing a team is
+what makes it a third party rather than an unrelated fight in the same town;
+the radius is what stops a four-man squad fighting two teams 800 m apart from
+counting as one. 200 m is deliberately the same constant as
+`strategy.HOT_DROP_RADIUS_CM` and the review router's own third-party radius,
+and `review.py` **imports** it rather than restating it so the page always
+reports the number the parser actually segmented with.
+
+Note this is a different measure from §29's third-party rate, which is "another
+team's kill within 200 m in the 30 s before *our death*". Denominators are
+fights and deaths respectively, and the page keeps them in separate sections
+for that reason.
+
+### 32.8 What the corpus tests can and cannot do
+
+Stated in the test module's own docstring, because it changes how much the
+green run is worth. `test_roster_agrees_with_the_geometry` in §31 compares two
+independent event streams and either they agree or the transform is wrong.
+**Nothing plays that role here.** No test can tell you the grouping is right.
+
+What they do instead: pin the arithmetic (both sides sum to the header from
+*both* directions, every cross-team kill accounted for exactly once), pin the
+invariants the grouping claims (`team_a < team_b`, `seq` dense and in time
+order, no silence inside an exchange longer than the gap — re-derived from the
+raw stream, not read off the rows), pin **determinism**, and pin the thing the
+model exists to fix (`test_kills_arrive_long_after_the_last_hit` fails if
+bleed-outs stop being far away, i.e. if the attach rules have become dead code).
+
+One test earned its place immediately.
+`test_the_fight_centre_is_equidistant_from_both_sides` was first written as a
+bounding-box check and would have passed a victim-only centroid, which at 300 m
+puts the fight on top of the team that lost it. Equidistance is the property
+that actually distinguishes the two, and it is exact because there is one
+attacker and one victim per hit.
+
+### 32.9 A cartesian product that read as a hang
+
+`GET /api/review/engagements` took over 60 s on the first run. The aggregate
+select was built over `select(e, ours.c.our_team).join_from(...).subquery()`
+while its thirteen `func.count().filter(...)` expressions still referenced `e`
+and `ours` directly — so SQLAlchemy put **all three** in the FROM clause: the
+subquery, `engagements` again, and `ours` again. Postgres built the product:
+506 x 11,158 x 506.
+
+Aggregating straight off the join instead is 183 ms. Worth writing down
+because the loud version was the lucky one — on a smaller archive it would
+have returned quickly with every count multiplied by 11,158, and a fight count
+of 5.6M would have looked like a bug while a *rate* over it would have looked
+completely fine.
+
+### 32.10 Reparse
+
+`PARSER_VERSION` 15 -> 16, all 97 matches, no re-download. **No bundle
+change** — `hits` already carried everything the model needs — so no replay
+needed re-rendering.
+
+| | before | after |
+|---|---:|---:|
+| `heatmap_bins` rows | 750,359 | 750,359 |
+| `heatmap_bins` total | 2,214,264 | 2,214,264 |
+| `kill_events` | 9,275 | 9,275 |
+| `knock_events` | 7,489 | 7,489 |
+| `strategy_metrics` | 9,309 | 9,309 |
+| `participant_weapons` | 15,640 | 15,640 |
+| `zone_play` | 20,503 | 20,503 |
+| `engagements` | 0 | 11,158 |
+| `engagement_participants` | 0 | 31,298 |
+
+Then reparsed **a second time** with `staleOnly=false`: every count above
+identical, including both new tables. That is the check that matters — neither
+has a ledger, so a double-insert would be silent, and
+`engagement_participants` has no FK to `engagements` to cascade from.
+
+Across the archive: 11,158 engagements (115/match), 1,316 with a third party
+(11.8%), 8,783 cross-team kills attached and **126 unattached (1.41%)** —
+within a rounding error of the 1.3% measured on the 25-match sample, and zero
+on 31 of 97 matches.
+
+### 32.11 What it says
+
+At 97 matches, 506 fights involving a tracked player over 83 of them:
+
+- **When the squad lands the first blow it ends a fight ahead on kills in 114
+  of 133 (86%); when the other side does, 43 of 142 (30%).** The largest split
+  anything in this app has produced.
+- It lands the first blow in **133 of 275 (48%)** of decided fights — an even
+  break, so the advantage above is not something the squad is currently
+  getting.
+- **231 of 506 exchanges ended with nobody dying.** Most contact is a few shots
+  at range.
+- 63 of 506 (12%) had a third team fighting one of the two sides at once.
+- Fights opening **beyond 150 m are the only band that trades negative**: 16
+  kills against 20 deaths across 120 of them. Every closer band is 55-60%.
+- DaddyGainz takes 53 damage in the average fight against 42 for AndAy, and
+  goes down in 33% of fights against 20% — consistent with §29's independent
+  finding that they are first of the squad down most often.
+
+### Verified
+
+`alembic upgrade head` (0010 inspected by hand — both indexes plain B-trees, so
+nothing goes in `HAND_MANAGED_INDEXES`). Backend **951 passed, 1 skipped**
+(the pre-existing missing-fixture skip), `ruff` clean. Frontend
+`npm run check` green — 226 tests across 16 files. Built, then driven in a real
+browser: no page errors, no failed requests, no sideways scroll, and the
+Fights section rendering all four subsections.

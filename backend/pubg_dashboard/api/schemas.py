@@ -848,3 +848,99 @@ class MatchZonePlay(ApiModel):
 
     max_phase: int
     players: dict[str, list[ZonePlayRow]]
+
+
+# ---------------------------------------------------------------------------
+# engagements — the one modelled output, and it says so
+# ---------------------------------------------------------------------------
+class EngagementResultRow(ApiModel):
+    """How one bucket of the squad's fights ended.
+
+    **The keys are descriptions, not verdicts.** `they_killed_only` is what the
+    kill counts say; "we lost that fight" is a reading of it, and one that a
+    third party can make wrong. Nothing in the database stores an outcome for
+    exactly this reason — see `telemetry/engagements.py`.
+    """
+
+    key: str
+    label: str
+    n: int
+
+
+class EngagementRangeRow(ApiModel):
+    """The squad's fights, bucketed by the range the **first blow landed at**.
+
+    Not by the range anyone shot from: `LogPlayerAttack` carries no victim, so
+    a miss belongs to nobody and only hits have two endpoints to measure
+    between.
+    """
+
+    lo_m: int
+    #: None on the open-ended top band.
+    hi_m: int | None
+    fights: int
+    we_killed: int
+    we_died: int
+
+
+class EngagementPlayerRow(ApiModel):
+    """One tracked player's average fight.
+
+    `damage_taken` is the column that does not exist anywhere else in the
+    schema: `participants` records damage dealt, and `kill_events` records who
+    died, but nothing before this said who was *losing* an exchange before
+    anybody went down.
+    """
+
+    account_id: str
+    name: str
+    fights: int
+    damage_dealt_avg: float
+    damage_taken_avg: float
+    #: Fights this player went down in, over fights they were in.
+    knocked: Rate
+    died: Rate
+
+
+class SquadEngagements(ApiModel):
+    """The squad's fights — **the one endpoint whose rows are modelled**.
+
+    Every other number this API returns is something PUBG stated: a kill, a
+    knock, a circle roster, a position. An "engagement" is a grouping this
+    codebase invents by cutting the stream of cross-team blows at
+    `gap_seconds` of silence between the same two teams, and the sweep behind
+    that constant found **no knee** anywhere from 5 s to 120 s.
+
+    `gap_seconds` therefore travels with the payload rather than being left in
+    the parser, so the page can name it. A reader who knows the fights were cut
+    at a 20 s silence can discount a fight count accordingly; a reader who does
+    not will take a modelled number for a measured one.
+    """
+
+    #: The grouping constant, in seconds. A judgement call, reported so it can
+    #: be said out loud.
+    gap_seconds: int
+    #: How close a second fight has to be to count as a third party — the same
+    #: 200 m `third_party_radius_m` on `SquadReview` uses.
+    third_party_radius_m: int
+
+    matches: int
+    #: Fights with at least one tracked player in them.
+    fights: int
+    #: Fights where somebody on either side died. The denominator for
+    #: `first_hit_*`, because a fight nobody lost has no side to be ahead on.
+    decided: int
+
+    results: list[EngagementResultRow]
+    #: Of decided fights, how often the squad landed the first blow.
+    first_hit_ours: Rate
+    #: Of decided fights the squad opened, how often it ended ahead on kills.
+    ahead_when_first: Rate
+    #: ...and when the other side landed first. The pair is the finding; either
+    #: alone invites reading a base rate as an effect.
+    ahead_when_not_first: Rate
+    #: Fights where a third team was fighting one of these two, at the same
+    #: time, within `third_party_radius_m`.
+    third_party: Rate
+    range_bands: list[EngagementRangeRow]
+    players: list[EngagementPlayerRow]

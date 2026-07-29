@@ -25,6 +25,8 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pubg_dashboard.db.models import (
+    Engagement,
+    EngagementParticipant,
     HeatmapBin,
     KillEvent,
     KnockEvent,
@@ -98,6 +100,20 @@ async def persist_parse_result(
     await session.execute(delete(ZonePlay).where(ZonePlay.match_id == match_id))
     for chunk in _chunks(result.zone_play_rows):
         await session.execute(pg_insert(ZonePlay).values(chunk))
+
+    # --- engagements: same shape, same reasoning ---------------------------
+    # The children go first. `engagement_participants` has no FK to
+    # `engagements` — only to `matches` — so nothing would cascade, and a
+    # parse that produced fewer engagements than the last would leave orphan
+    # participant rows pointing at a `seq` that now means a different fight.
+    await session.execute(
+        delete(EngagementParticipant).where(EngagementParticipant.match_id == match_id)
+    )
+    await session.execute(delete(Engagement).where(Engagement.match_id == match_id))
+    for chunk in _chunks(result.engagement_rows):
+        await session.execute(pg_insert(Engagement).values(chunk))
+    for chunk in _chunks(result.engagement_participant_rows):
+        await session.execute(pg_insert(EngagementParticipant).values(chunk))
 
     # --- participant_weapons: same shape, same reasoning --------------------
     await session.execute(
@@ -190,6 +206,7 @@ async def persist_parse_result(
         "telemetry.persisted",
         match_id=match_id,
         kills=len(result.kill_rows),
+        engagements=len(result.engagement_rows),
         bins=len(result.heatmap_rows),
         reversed_bins=len(previous_ledger or ()),
         replay_bytes=len(result.bundle),

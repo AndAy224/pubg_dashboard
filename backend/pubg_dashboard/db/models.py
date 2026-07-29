@@ -583,6 +583,125 @@ class ZonePlay(Base):
     )
 
 
+class Engagement(Base):
+    """One exchange of fire between two teams (parser v16).
+
+    Derived by `telemetry/engagements.py`, delete-then-insert on `match_id`
+    like `kill_events` and `zone_play`. No ledger is involved.
+
+    **Read the module docstring before querying this table.** Everything else
+    the parser writes is a wire fact; an "engagement" is not — PUBG records
+    hits, knocks and deaths, and this groups them by a 20 s silence between the
+    same two teams. The sweep behind that number found no knee anywhere between
+    5 s and 120 s, so the row *count* is a modelled quantity and every rate
+    computed over it inherits that. The per-side counters are facts **given**
+    the grouping.
+
+    Deliberately **no `outcome` column.** "Won", "lost", "traded" and "broke
+    off" are readings of `kills_a`/`kills_b`, and a stored verdict would
+    outlive the reasoning behind it — a fight where we killed two and lost
+    three to a third party is not obviously "lost" by our side. The API derives
+    a label at query time and names it after what it counts.
+
+    Rows exist for every team pair, bots included, on the same reasoning as
+    `strategy_metrics` and `zone_play`.
+    """
+
+    __tablename__ = "engagements"
+
+    match_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("matches.match_id", ondelete="CASCADE"), primary_key=True
+    )
+    #: Assigned in start-time order, stable for a given parser version and
+    #: telemetry file — the same contract `kill_events.seq` has.
+    seq: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    t_start_s: Mapped[float] = mapped_column(Float)
+    t_end_s: Mapped[float] = mapped_column(Float)
+
+    #: `team_a < team_b` always, so a pair has one representation. The `_a`/`_b`
+    #: counters below follow that ordering and mean nothing on their own —
+    #: "our side" is whichever of the two a tracked account is on.
+    team_a: Mapped[int] = mapped_column(Integer)
+    team_b: Mapped[int] = mapped_column(Integer)
+
+    #: CENTIMETRES. Midpoint of every endpoint of every hit, shooters included:
+    #: a victim-only centroid puts a 300 m fight on top of the team that lost
+    #: it. NULL only when the exchange was knocks with no attributed hit.
+    x: Mapped[float | None] = mapped_column(Float)
+    y: Mapped[float | None] = mapped_column(Float)
+
+    #: **The first blow that landed — not "who started it."** `LogPlayerAttack`
+    #: carries no victim, so a shot that opened a fight and missed belongs to
+    #: nobody, and a team that fired first and missed appears here as the team
+    #: that got shot at. No column in this table can fix that; the name is the
+    #: mitigation, and anything reading it must keep the distinction.
+    first_hit_account_id: Mapped[str | None] = mapped_column(String(64))
+    first_hit_team_id: Mapped[int | None] = mapped_column(Integer)
+    first_hit_range_cm: Mapped[float | None] = mapped_column(Float)
+    #: The closest the two sides got, over the exchange's hits — whether a
+    #: long-range trade ever turned into a fight.
+    min_range_cm: Mapped[float | None] = mapped_column(Float)
+
+    hits_a: Mapped[int] = mapped_column(Integer, default=0)
+    hits_b: Mapped[int] = mapped_column(Integer, default=0)
+    dmg_a_to_b: Mapped[float] = mapped_column(Float, default=0.0)
+    dmg_b_to_a: Mapped[float] = mapped_column(Float, default=0.0)
+    knocks_a: Mapped[int] = mapped_column(Integer, default=0)
+    knocks_b: Mapped[int] = mapped_column(Integer, default=0)
+    kills_a: Mapped[int] = mapped_column(Integer, default=0)
+    kills_b: Mapped[int] = mapped_column(Integer, default=0)
+
+    #: A team that was fighting one of these two, at the same time, within
+    #: 200 m. NULL is the common case (85%).
+    third_party_team_id: Mapped[int | None] = mapped_column(Integer)
+
+    __table_args__ = (
+        Index("ix_engagements_start", "match_id", "t_start_s"),
+    )
+
+
+class EngagementParticipant(Base):
+    """What one account did in one engagement (parser v16).
+
+    This is the table "why did we lose that fight" is answered from: it is the
+    only place in the schema that can say a player took 180 damage and dealt
+    12. `kill_events` records who died; nothing before this recorded who was
+    losing before anyone did.
+
+    A row exists for every account that dealt or took a blow, so the two sides
+    of an engagement sum to its totals — asserted per match by a corpus test,
+    because a per-player table that quietly disagrees with the header it hangs
+    off is exactly the shape of failure this repo keeps finding.
+    """
+
+    __tablename__ = "engagement_participants"
+
+    match_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("matches.match_id", ondelete="CASCADE"), primary_key=True
+    )
+    seq: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # No FK, same reason as participants: bot ids are match-scoped.
+    account_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    team_id: Mapped[int] = mapped_column(Integer)
+
+    hits_dealt: Mapped[int] = mapped_column(Integer, default=0)
+    hits_taken: Mapped[int] = mapped_column(Integer, default=0)
+    damage_dealt: Mapped[float] = mapped_column(Float, default=0.0)
+    damage_taken: Mapped[float] = mapped_column(Float, default=0.0)
+    knocks: Mapped[int] = mapped_column(Integer, default=0)
+    kills: Mapped[int] = mapped_column(Integer, default=0)
+    #: Went down in this exchange. Not the same as `died` — 39% of knocks
+    #: against the squad end in a revive.
+    was_knocked: Mapped[bool] = mapped_column(Boolean, default=False)
+    died: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    __table_args__ = (
+        # "Every fight this account was in" — the review page's scan.
+        Index("ix_engagement_participants_account", "account_id", "match_id"),
+    )
+
+
 class KnockEvent(Base):
     """One `LogPlayerMakeGroggy`, in SQL for the same reason kills are.
 

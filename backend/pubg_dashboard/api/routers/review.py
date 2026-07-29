@@ -26,7 +26,7 @@ wrong number to live.
 
 from __future__ import annotations
 
-from typing import Annotated, Final
+from typing import Annotated, Any, Final
 
 from fastapi import APIRouter, Query
 from sqlalchemy import case, exists, func, or_, select
@@ -35,21 +35,44 @@ from sqlalchemy.sql import ColumnElement
 from pubg_dashboard.api.deps import career_filter
 from pubg_dashboard.api.schemas import (
     DeathCauseRow,
+    EngagementPlayerRow,
+    EngagementRangeRow,
+    EngagementResultRow,
     FirstDeathRow,
     KnockConversion,
     RangeBandRow,
     Rate,
     SessionRow,
+    SquadEngagements,
     SquadReview,
 )
-from pubg_dashboard.db.models import KillEvent, KnockEvent, Match, Participant, Player
+from pubg_dashboard.db.models import (
+    Engagement,
+    EngagementParticipant,
+    KillEvent,
+    KnockEvent,
+    Match,
+    Participant,
+    Player,
+)
 from pubg_dashboard.db.session import SessionDep
+from pubg_dashboard.telemetry.engagements import (
+    ENGAGEMENT_GAP_S,
+)
+from pubg_dashboard.telemetry.engagements import (
+    THIRD_PARTY_RADIUS_CM as ENGAGEMENT_THIRD_PARTY_RADIUS_CM,
+)
 
 router = APIRouter(tags=["review"])
 
 #: How close another team's kill must be to count as a third party on our
 #: death. 200 m is the same radius `strategy_metrics.hot_drop_n` uses for a
 #: contested drop, kept identical so the two numbers mean the same "nearby".
+#:
+#: `ENGAGEMENT_THIRD_PARTY_RADIUS_CM` above is the same 200 m answering a
+#: different question — "another team's *fight* overlapping ours" rather than
+#: "another team's kill near our death". It is imported rather than restated so
+#: the page always reports the number the parser actually segmented with.
 THIRD_PARTY_RADIUS_CM: Final = 20_000.0
 
 #: ...and how long before our death. Beyond half a minute the other fight is a
@@ -380,6 +403,222 @@ async def _range_bands(
             lo_m=lo, hi_m=hi, we_killed=by_band.get(i, (0, 0))[0], we_died=by_band.get(i, (0, 0))[1]
         )
         for i, (lo, hi) in enumerate(_RANGE_BANDS)
+    ]
+
+
+#: Bands for where a fight's **first landed blow** was, in metres. Wider at the
+#: top than `_RANGE_BANDS` because an engagement is a whole exchange rather than
+#: one shot, and the long tail is thinner.
+_ENGAGEMENT_BANDS: Final[tuple[tuple[int, int | None], ...]] = (
+    (0, 25),
+    (25, 75),
+    (75, 150),
+    (150, None),
+)
+
+
+@router.get("/review/engagements", response_model=SquadEngagements)
+async def squad_engagements(session: SessionDep) -> SquadEngagements:
+    """The squad's fights.
+
+    **The only endpoint here whose rows are a model rather than a reading.**
+    `engagements` groups cross-team blows by a 20 s silence, and the sweep
+    behind that constant found no knee — so `gap_seconds` goes out with the
+    payload and the page prints it. Every count below inherits that choice;
+    the per-side kill, knock and damage figures are facts *given* it.
+
+    "Our side" is whichever of `team_a`/`team_b` a tracked account was on, so
+    everything is expressed through `engagement_participants` first. That
+    subquery is `DISTINCT` on `(match_id, seq)`: three tracked players in one
+    fight is one fight, and a plain join would count it three times — the same
+    trap `/strategy/drops` avoids by keying on `(match, team)`.
+    """
+    career = _career_matches()
+    tracked = _tracked_ids()
+
+    ours = (
+        select(
+            EngagementParticipant.match_id,
+            EngagementParticipant.seq,
+            EngagementParticipant.team_id.label("our_team"),
+        )
+        .where(
+            EngagementParticipant.match_id.in_(career),
+            EngagementParticipant.account_id.in_(tracked),
+        )
+        .distinct()
+        .subquery()
+    )
+
+    e = Engagement.__table__
+    we_are_a = ours.c.our_team == e.c.team_a
+    our_kills = case((we_are_a, e.c.kills_a), else_=e.c.kills_b)
+    their_kills = case((we_are_a, e.c.kills_b), else_=e.c.kills_a)
+    decided = (e.c.kills_a + e.c.kills_b) > 0
+    # NULL when no hit landed at all, which is why this is not `!=`. A fight
+    # whose first blow is unattributable is not a fight the other side opened.
+    we_first = e.c.first_hit_team_id == ours.c.our_team
+
+    # Aggregated straight off the join, **not** off `select(...).subquery()`.
+    # Wrapping it and then aggregating expressions that still reference `e` and
+    # `ours` puts all three in the FROM clause: the subquery, `engagements`
+    # again, and `ours` again. Postgres dutifully builds the cartesian product
+    # — 506 x 11,158 x 506 rows here, which reads as the endpoint hanging and
+    # would read as plausible-but-multiplied counts on a smaller archive.
+    totals = (
+        await session.execute(
+            select(
+                func.count(),
+                func.count(func.distinct(e.c.match_id)),
+                func.count().filter(decided),
+                func.count().filter(decided, we_first),
+                func.count().filter(decided, we_first, our_kills > their_kills),
+                func.count().filter(decided, we_first),
+                func.count().filter(decided, ~we_first, our_kills > their_kills),
+                func.count().filter(decided, ~we_first),
+                func.count().filter(e.c.third_party_team_id.is_not(None)),
+                func.count().filter(our_kills > 0, their_kills == 0),
+                func.count().filter(their_kills > 0, our_kills == 0),
+                func.count().filter(our_kills > 0, their_kills > 0),
+                func.count().filter(~decided),
+            )
+            .select_from(e)
+            .join(ours, (e.c.match_id == ours.c.match_id) & (e.c.seq == ours.c.seq))
+        )
+    ).one()
+    (
+        fights,
+        matches,
+        n_decided,
+        n_we_first,
+        n_ahead_first,
+        n_first_total,
+        n_ahead_not_first,
+        n_not_first_total,
+        n_third,
+        n_ours_only,
+        n_theirs_only,
+        n_both,
+        n_neither,
+    ) = (int(x or 0) for x in totals)
+
+    return SquadEngagements(
+        gap_seconds=int(ENGAGEMENT_GAP_S),
+        third_party_radius_m=int(ENGAGEMENT_THIRD_PARTY_RADIUS_CM / 100),
+        matches=matches,
+        fights=fights,
+        decided=n_decided,
+        results=[
+            # Labels describe the kill counts and stop there. "Won" and "lost"
+            # are readings, and a fight where a third party cleaned up after us
+            # is not obviously ours to have lost.
+            EngagementResultRow(
+                key="ours_only", label="only they lost someone", n=n_ours_only
+            ),
+            EngagementResultRow(
+                key="theirs_only", label="only we lost someone", n=n_theirs_only
+            ),
+            EngagementResultRow(key="both", label="both sides lost someone", n=n_both),
+            EngagementResultRow(key="neither", label="nobody died", n=n_neither),
+        ],
+        first_hit_ours=_rate(n_we_first, n_decided),
+        ahead_when_first=_rate(n_ahead_first, n_first_total),
+        ahead_when_not_first=_rate(n_ahead_not_first, n_not_first_total),
+        third_party=_rate(n_third, fights),
+        range_bands=await _engagement_bands(session, e, ours, our_kills, their_kills),
+        players=await _engagement_players(session, career, tracked),
+    )
+
+
+async def _engagement_bands(
+    session: SessionDep,
+    e: Any,
+    ours: Any,
+    our_kills: ColumnElement,
+    their_kills: ColumnElement,
+) -> list[EngagementRangeRow]:
+    """Fights bucketed by the range the first blow landed at.
+
+    `first_hit_range_cm` is NULL when the exchange was knocks with no
+    attributed hit, and those are dropped rather than bucketed at 0 m — the
+    same reasoning that keeps `distance_cm = -1` out of the kill bands.
+    """
+    metres = e.c.first_hit_range_cm / 100.0
+    band = case(
+        *[(metres < hi, i) for i, (_lo, hi) in enumerate(_ENGAGEMENT_BANDS) if hi is not None],
+        else_=len(_ENGAGEMENT_BANDS) - 1,
+    )
+    rows = (
+        await session.execute(
+            select(
+                band.label("band"),
+                func.count(),
+                func.sum(our_kills),
+                func.sum(their_kills),
+            )
+            .select_from(e)
+            .join(ours, (e.c.match_id == ours.c.match_id) & (e.c.seq == ours.c.seq))
+            .where(e.c.first_hit_range_cm.is_not(None))
+            .group_by(band)
+        )
+    ).all()
+
+    by_band = {int(b): (int(n or 0), int(k or 0), int(d or 0)) for b, n, k, d in rows}
+    return [
+        EngagementRangeRow(
+            lo_m=lo,
+            hi_m=hi,
+            fights=by_band.get(i, (0, 0, 0))[0],
+            we_killed=by_band.get(i, (0, 0, 0))[1],
+            we_died=by_band.get(i, (0, 0, 0))[2],
+        )
+        for i, (lo, hi) in enumerate(_ENGAGEMENT_BANDS)
+    ]
+
+
+async def _engagement_players(
+    session: SessionDep, career: ColumnElement, tracked: ColumnElement
+) -> list[EngagementPlayerRow]:
+    """Per tracked player: the average fight, and how it goes for them.
+
+    `damage_taken` exists nowhere else in the schema. `participants` counts
+    damage dealt and `kill_events` records who died, so until now the only
+    measure of a fight going badly was somebody losing it.
+    """
+    ep = EngagementParticipant
+    rows = (
+        await session.execute(
+            select(
+                ep.account_id,
+                func.min(Participant.name),
+                func.count(),
+                func.avg(ep.damage_dealt),
+                func.avg(ep.damage_taken),
+                func.count().filter(ep.was_knocked),
+                func.count().filter(ep.died),
+            )
+            .join(
+                Participant,
+                (Participant.match_id == ep.match_id)
+                & (Participant.account_id == ep.account_id),
+            )
+            .where(ep.match_id.in_(career), ep.account_id.in_(tracked))
+            .group_by(ep.account_id)
+            .order_by(func.count().desc())
+        )
+    ).all()
+
+    return [
+        EngagementPlayerRow(
+            account_id=account,
+            name=name or account,
+            fights=int(n or 0),
+            damage_dealt_avg=float(dealt or 0.0),
+            damage_taken_avg=float(taken or 0.0),
+            knocked=_rate(int(knocked or 0), int(n or 0)),
+            died=_rate(int(died or 0), int(n or 0)),
+        )
+        for account, name, n, dealt, taken, knocked, died in rows
     ]
 
 

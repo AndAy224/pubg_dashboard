@@ -28,6 +28,12 @@ from pubg_dashboard.api.routers.review import (
 )
 from pubg_dashboard.db.models import KillEvent, Match, Player
 from pubg_dashboard.db.session import dispose_engine, get_session
+from pubg_dashboard.telemetry.engagements import (
+    ENGAGEMENT_GAP_S,
+)
+from pubg_dashboard.telemetry.engagements import (
+    THIRD_PARTY_RADIUS_CM as ENGAGEMENT_THIRD_PARTY_RADIUS_CM,
+)
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -498,3 +504,136 @@ async def test_deaths_exclude_suicides(review: dict) -> None:
             )
         )
     assert review["deaths"] == total - suicides
+
+
+# ---------------------------------------------------------------------------
+# engagements — the modelled endpoint
+# ---------------------------------------------------------------------------
+@pytest_asyncio.fixture
+async def fights(client: httpx.AsyncClient) -> dict:
+    r = await client.get("/api/review/engagements")
+    assert r.status_code == 200
+    body = r.json()
+    if body["fights"] == 0:
+        pytest.skip("no engagements in the archive — reparse at v16 or later")
+    return body
+
+
+async def test_engagement_rates_are_well_formed(fights: dict) -> None:
+    for key in ("firstHitOurs", "aheadWhenFirst", "aheadWhenNotFirst", "thirdParty"):
+        _check_rate(fights[key])
+    for player in fights["players"]:
+        _check_rate(player["knocked"])
+        _check_rate(player["died"])
+
+
+async def test_the_gap_constant_travels_with_the_payload(fights: dict) -> None:
+    """The whole point of returning it.
+
+    `ENGAGEMENT_GAP_S` is a judgement call with no knee behind it, so the page
+    has to be able to name it. A payload that omitted it would leave the
+    frontend hard-coding 20 — and silently disagreeing with the parser the day
+    someone changed one and not the other.
+    """
+    assert fights["gapSeconds"] == int(ENGAGEMENT_GAP_S)
+    assert fights["thirdPartyRadiusM"] == int(ENGAGEMENT_THIRD_PARTY_RADIUS_CM / 100)
+
+
+async def test_no_verdict_is_returned(fights: dict) -> None:
+    """The API may label the kill counts; it may not judge them.
+
+    `engagements` stores no outcome on purpose. If a `won`/`lost` key ever
+    appears here, the reasoning that kept it out of the schema has been lost in
+    transit and the page will print it.
+    """
+    assert "outcome" not in fights
+    for row in fights["results"]:
+        assert row["key"] in {"ours_only", "theirs_only", "both", "neither"}
+        assert not any(w in row["label"].lower() for w in ("won", "lost the", "win"))
+
+
+async def test_the_result_buckets_partition_every_fight(fights: dict) -> None:
+    """Unlike `deathCauses`, these four are exclusive and exhaustive.
+
+    Derived from `kills_a`/`kills_b` by four disjoint predicates, so anything
+    other than an exact sum means one of them is wrong — and a fight that fell
+    through every bucket would quietly shrink the denominator of every share
+    the page prints.
+    """
+    assert sum(r["n"] for r in fights["results"]) == fights["fights"]
+
+
+async def test_decided_matches_the_buckets_that_had_a_death(fights: dict) -> None:
+    by_key = {r["key"]: r["n"] for r in fights["results"]}
+    assert fights["decided"] == by_key["ours_only"] + by_key["theirs_only"] + by_key["both"]
+    assert fights["decided"] + by_key["neither"] == fights["fights"]
+
+
+async def test_the_first_hit_split_covers_every_decided_fight(fights: dict) -> None:
+    """The two halves are two views of one split, so they must add up.
+
+    This is what makes it safe for `engagements.ts` to state them as a pair. If
+    they did not partition, "76% when we open, 25% when they do" would be two
+    unrelated numbers printed side by side as though they contrasted.
+
+    They sum to `decided` minus the fights whose first blow is unattributable —
+    an exchange of knocks with no `Hit` behind it leaves `first_hit_team_id`
+    NULL, and those belong to neither side.
+    """
+    ours = fights["aheadWhenFirst"]["total"]
+    theirs = fights["aheadWhenNotFirst"]["total"]
+    assert ours + theirs <= fights["decided"]
+    assert fights["firstHitOurs"]["n"] == ours
+    assert fights["firstHitOurs"]["total"] == fights["decided"]
+
+
+async def test_engagements_agree_with_the_table(
+    client: httpx.AsyncClient, fights: dict
+) -> None:
+    """Re-derive the fight count with different SQL than the router used.
+
+    The router expresses "our side" through `engagement_participants` and
+    de-duplicates on `(match_id, seq)`; this counts the same thing by joining
+    the other way round. Three tracked players in one fight is one fight, and
+    the trap is that the naive join returns three — a 3x fight count that still
+    produces perfectly plausible percentages.
+    """
+    async with get_session() as session:
+        n = await session.scalar(
+            text(
+                "SELECT count(*) FROM engagements e"
+                " WHERE EXISTS ("
+                "   SELECT 1 FROM engagement_participants p"
+                "   JOIN players pl ON pl.account_id = p.account_id AND pl.tracked"
+                "   WHERE p.match_id = e.match_id AND p.seq = e.seq)"
+                " AND e.match_id IN (SELECT match_id FROM matches"
+                "   WHERE match_type = 'official' AND NOT is_custom_match)"
+            )
+        )
+    assert fights["fights"] == int(n or 0)
+
+
+async def test_range_bands_are_ordered_and_open_ended_at_the_top(fights: dict) -> None:
+    bands = fights["rangeBands"]
+    assert [b["loM"] for b in bands] == sorted(b["loM"] for b in bands)
+    assert bands[-1]["hiM"] is None
+    for band in bands[:-1]:
+        assert band["hiM"] is not None
+
+
+async def test_players_are_tracked_players_only(fights: dict) -> None:
+    async with get_session() as session:
+        rows = await session.execute(select(Player.account_id).where(Player.tracked))
+        tracked = {row[0] for row in rows.all()}
+    assert {p["accountId"] for p in fights["players"]} <= tracked
+
+
+async def test_damage_taken_is_populated(fights: dict) -> None:
+    """The column that exists nowhere else in the schema.
+
+    A zero here would be indistinguishable from "nobody ever got shot", and
+    `engagement_participants.damage_taken` is NOT NULL — so `count()` proves
+    nothing about it and only a positive value does. That is the same trap the
+    `allWeaponStats` columns fell into.
+    """
+    assert any(p["damageTakenAvg"] > 0 for p in fights["players"])

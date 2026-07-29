@@ -186,7 +186,25 @@ BUNDLE_VERSION: Final = 1
 #:      `sample_lag_ms` so a disagreement can be explained rather than
 #:      tolerated. **No bundle change** — the phase events already carried
 #:      everything, so replays do not need re-downloading or re-rendering.
-PARSER_VERSION: Final = 15
+#:
+#: v16: fights. New `engagements` and `engagement_participants` tables,
+#:      grouping cross-team hits and knocks into exchanges per team pair and
+#:      attaching each kill to the exchange that caused it.
+#:
+#:      **This is the first derived output in the parser that is a model
+#:      rather than a reading.** The grouping is cut at a 20 s silence and the
+#:      sweep behind that found no knee between 5 s and 120 s, so the row
+#:      count is a choice — `engagements.ENGAGEMENT_GAP_S` carries the
+#:      evidence and the API reports the number to the page. There is
+#:      deliberately no `outcome` column: the per-side counters are facts
+#:      given the grouping, a verdict is not.
+#:
+#:      Kills are attached rather than segmented, because `Damage_DBNO`
+#:      bleed-out ticks are self-attributed and produce no hit — 16% of
+#:      cross-team kills land 20 s or more after the killer's last attributed
+#:      hit on the victim. **No bundle change**: `hits` already carried
+#:      everything this needs.
+PARSER_VERSION: Final = 16
 
 DEFAULT_TICK_MS: Final = 100
 FALLBACK_TICK_MS: Final = 1000

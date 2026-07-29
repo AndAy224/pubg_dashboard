@@ -39,6 +39,7 @@ from pubg_dashboard.telemetry.bundle import (
     write_heat_ledger,
 )
 from pubg_dashboard.telemetry.combat import CombatTracker
+from pubg_dashboard.telemetry.engagements import compute_engagements
 from pubg_dashboard.telemetry.frames import FrameIndex
 from pubg_dashboard.telemetry.heatmap import (
     KIND_DEATH,
@@ -96,8 +97,14 @@ class ParseResult:
     knock_rows: list[dict[str, Any]]
     strategy_rows: list[dict[str, Any]]
     zone_play_rows: list[dict[str, Any]]
+    engagement_rows: list[dict[str, Any]]
+    engagement_participant_rows: list[dict[str, Any]]
     unknown_events: dict[str, int] = field(default_factory=dict)
     duration_ms: int = 0
+    #: Cross-team kills that attached to no exchange — the credited killer
+    #: never landed an attributed hit on the victim. Measured at 1.3%; carried
+    #: out of the parse so it is logged rather than silently absorbed.
+    unattached_kills: int = 0
 
 
 def parse_telemetry(
@@ -214,6 +221,12 @@ def parse_telemetry(
         dicts={name: d.values for name, d in dicts.items()},
     )
 
+    engagement_rows, engagement_participant_rows, unattached = compute_engagements(
+        match_id=match_id,
+        combat=combat,
+        teams={a: r.team_id for a, r in roster.items()},
+    )
+
     result = ParseResult(
         match_id=match_id,
         parser_version=PARSER_VERSION,
@@ -242,8 +255,11 @@ def parse_telemetry(
             teams={a: r.team_id for a, r in roster.items()},
             t0_ms=meta.t0_ms,
         ),
+        engagement_rows=engagement_rows,
+        engagement_participant_rows=engagement_participant_rows,
         unknown_events=unknown,
         duration_ms=duration_ms,
+        unattached_kills=unattached,
     )
     log.info(
         "telemetry.parsed",
@@ -251,6 +267,11 @@ def parse_telemetry(
         events=len(events),
         players=len(players),
         kills=len(combat.kills),
+        engagements=len(engagement_rows),
+        # Expected to be small and non-zero (~1.3% of cross-team kills). A run
+        # of zeros across a whole reparse would mean the attach rules stopped
+        # being exercised, not that the data got better.
+        unattached_kills=unattached,
         bundle_bytes=len(result.bundle),
         unknown_events=sum(unknown.values()),
     )

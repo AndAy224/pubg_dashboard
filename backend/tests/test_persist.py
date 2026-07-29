@@ -78,6 +78,7 @@ def _result(
     weapons: int = 2,
     knocks: int = 2,
     zone_play: int = 2,
+    engagements: int = 2,
 ) -> ParseResult:
     return ParseResult(
         match_id="m1",
@@ -150,6 +151,33 @@ def _result(
                 "in_vehicle_at_close": False, "sample_lag_ms": 1200,
             }
             for i in range(zone_play)
+        ],
+        engagement_rows=[
+            {
+                "match_id": "m1", "seq": i, "t_start_s": 100.0 * i,
+                "t_end_s": 100.0 * i + 8.0, "team_a": 1, "team_b": 2 + i,
+                "x": 1000.0, "y": 2000.0,
+                "first_hit_account_id": "account.v0", "first_hit_team_id": 1,
+                "first_hit_range_cm": 4200.0, "min_range_cm": 3100.0,
+                "hits_a": 3, "hits_b": 1, "dmg_a_to_b": 90.0, "dmg_b_to_a": 25.0,
+                "knocks_a": 1, "knocks_b": 0, "kills_a": 1, "kills_b": 0,
+                "third_party_team_id": None,
+            }
+            for i in range(engagements)
+        ],
+        # Two per engagement, which is what makes the child-first delete in
+        # `persist` observable: a shortened reparse leaves twice as many
+        # orphans as engagements if the order is wrong.
+        engagement_participant_rows=[
+            {
+                "match_id": "m1", "seq": i, "account_id": f"account.v{side}",
+                "team_id": 1 + side, "hits_dealt": 3 - side, "hits_taken": side + 1,
+                "damage_dealt": 90.0, "damage_taken": 25.0,
+                "knocks": 1 - side, "kills": 1 - side,
+                "was_knocked": bool(side), "died": bool(side),
+            }
+            for i in range(engagements)
+            for side in (0, 1)
         ],
     )
 
@@ -341,3 +369,45 @@ async def test_zone_play_rows_are_replaced_not_accumulated(session: AsyncSession
     await session.commit()
     # Six, not nine: the shrink proves the delete ran.
     assert await session.scalar(sql("SELECT count(*) FROM zone_play")) == 3
+
+
+async def test_engagement_rows_are_replaced_and_leave_no_orphans(
+    session: AsyncSession,
+) -> None:
+    """Both engagement tables shrink together (parser v16).
+
+    `engagement_participants` has an FK to `matches` only, so nothing cascades
+    when an engagement row goes away — `persist` deletes the children itself,
+    first. `seq` means a different fight after every reparse, so an orphaned
+    participant row does not read as missing data: it reads as a stranger who
+    was in your fight.
+
+    The shrink from six to three is what proves the deletes ran at all. An
+    upsert would leave nine and twelve, and every per-fight rate would be
+    computed over a set that never shrinks.
+    """
+    await persist_parse_result(
+        session, _result(engagements=6), replay_key="r", heat_ledger_key="h",
+        previous_ledger=None, was_parsed=False, map_name=MAP, match_type=MATCH_TYPE, day=DAY,
+    )
+    await session.commit()
+    assert await session.scalar(sql("SELECT count(*) FROM engagements")) == 6
+    assert await session.scalar(sql("SELECT count(*) FROM engagement_participants")) == 12
+
+    ledger = [("movement", "account.a", "squad-fpp", i, 0, 5) for i in range(3)]
+    await persist_parse_result(
+        session, _result(engagements=3), replay_key="r", heat_ledger_key="h",
+        previous_ledger=ledger, was_parsed=True, map_name=MAP, match_type=MATCH_TYPE, day=DAY,
+    )
+    await session.commit()
+    assert await session.scalar(sql("SELECT count(*) FROM engagements")) == 3
+    assert await session.scalar(sql("SELECT count(*) FROM engagement_participants")) == 6
+
+    orphans = await session.scalar(
+        sql(
+            "SELECT count(*) FROM engagement_participants p"
+            " WHERE NOT EXISTS (SELECT 1 FROM engagements e"
+            "   WHERE e.match_id = p.match_id AND e.seq = p.seq)"
+        )
+    )
+    assert orphans == 0

@@ -207,6 +207,24 @@ adding. If a parsed match has no ledger, persist *refuses* rather than
 proceeding — a heatmap that is quietly 2x is indistinguishable from a popular
 drop spot.
 
+**`telemetry/engagements.py` is the parser's only model.** Everything else it
+writes is a reading of something PUBG states — a kill, a knock, a circle
+roster, a position. PUBG does **not** record fights, so an "engagement" is a
+grouping this codebase invents by cutting the stream of cross-team blows at
+`ENGAGEMENT_GAP_S` (20 s) of silence between the same two teams. The sweep
+behind that constant found **no knee** anywhere from 5 s to 120 s — 20 s gives
+2,992 engagements over 25 matches and 30 s gives 2,589, a 13% swing from a
+ten-second choice. So the row *count* is a judgement call, every rate over it
+inherits that, and the constant is returned by `/api/review/engagements` so the
+page can name it rather than presenting it as discovered.
+
+For the same reason there is deliberately **no `outcome` column**: the per-side
+kill, knock and damage counters are facts given the grouping, a verdict is not.
+The API derives a label at query time and names it after what it counts
+(`ours_only`, `theirs_only`, `both`, `neither`), never "won" or "lost". Both
+`test_no_outcome_verdict_is_stored` and a frontend test pin that, because it is
+the kind of decision that gets quietly reversed by whoever writes the next card.
+
 ### Frontend
 
 Vite/React/Pixi. `npm run build` emits `dist/`, which the API mounts at `/`
@@ -313,6 +331,19 @@ Full list: BUILD-SPEC §6 (34 of them) and HANDOFF §5. The ones that bite most:
   close — a match can end on an announcement, so never assume pairs.
   `playersInWhiteCircle` is trustworthy: 155 of 156 named players are genuinely
   inside the radius.
+- **A death can land a minute after the last hit that caused it, and it leaves
+  no trail.** `Damage_DBNO` bleed-out ticks are **self-attributed** — attacker
+  == victim, `attackId: -1` — so `CombatTracker._damage` drops them under the
+  self-damage guard and they produce no `Hit` at all. Measured: on **16% of
+  cross-team kills** the credited killer's last attributed hit on that victim
+  is 20 s or more earlier, up to 122 s. Anything grouping combat by hit
+  timestamps therefore loses those deaths, or opens a fresh one-event fight for
+  each one — reading as "team A killed team B with no exchange" a minute after
+  the fight that actually did it. `engagements.py` attaches kills afterwards
+  instead, and its middle rule is `dbno_maker`'s knock: PUBG's own link, no
+  threshold. 1.3% attach to nothing at all, and those are **counted**
+  (`ParseResult.unattached_kills`), because a kill that silently vanished would
+  make a fight review kinder than the match.
 - **`LogItemDrop` never fires on death.** The victim emits a `LogItemDetach`
   burst at +0s and a `LogItemUnequip` burst at **exactly +60s**. Suppress item
   events after an account's **final** death — a player can die twice, and seven
