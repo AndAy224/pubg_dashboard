@@ -799,3 +799,30 @@ export interface SquadDeaths {
   outsideAnyFight: number
   rows: DeathListRow[]
 }
+
+export interface MatchEngagementRow {
+  seq: number
+  tStartS: number
+  tEndS: number
+  /** Ordered low-first, so neither side means "us" on its own — resolve
+   *  against the followed player's team. */
+  teamA: number
+  teamB: number
+  x: number | null
+  y: number | null
+  killsA: number
+  killsB: number
+  knocksA: number
+  knocksB: number
+  thirdPartyTeamId: number | null
+  /** Everyone who dealt or took a blow, bots included. */
+  accounts: string[]
+}
+
+export interface MatchEngagements {
+  /** The grouping constant. Travels with the rows for the same reason it does
+   *  on `SquadEngagements`: these are a model, not a wire fact. */
+  gapSeconds: number
+  /** Empty is a real answer — a match parsed before v16 has no rows. */
+  engagements: MatchEngagementRow[]
+}

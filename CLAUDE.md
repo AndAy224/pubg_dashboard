@@ -246,6 +246,20 @@ Vite/React/Pixi. `npm run build` emits `dist/`, which the API mounts at `/`
 after every router, so the deployed app is one origin with no CORS. In
 development Vite proxies instead, so a missing `dist/` is normal.
 
+**The replay is a review tool, and its panels read the bundle rather than the
+server.** `bundle.hits` has carried every attributed hit — damage, body part,
+weapon, both endpoints — since parser v4 and was used only to colour tracers;
+the combat panel now prints it. Fights are the exception and come from
+`GET /matches/{id}/engagements`, fetched once per match: re-segmenting
+`bundle.hits` in the browser would have been quicker and would have been a
+**second model with its own threshold**, silently disagreeing with
+`/review/engagements` about how many fights a match had.
+
+`?follow=<accountId>` has been parsed by `Replay.tsx` since the replay shipped;
+until Phase 6 **nothing produced one**. Every death row on `/review` and every
+kill-feed row on a match page now does — following the **victim**, because the
+row describes a death and the killer is often 200 m off-screen.
+
 **React never renders at 60 Hz.** The replay playhead lives on the `Renderer`
 object, Pixi is mounted imperatively, and DOM panels subscribe to an external
 store that ticks at 10 Hz. `ReplayCanvas` is the only React↔Pixi boundary.

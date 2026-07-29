@@ -42,6 +42,8 @@ from pubg_dashboard.api.schemas import (
     EngagementResultRow,
     FirstDeathRow,
     KnockConversion,
+    MatchEngagementRow,
+    MatchEngagements,
     RangeBandRow,
     Rate,
     SessionRow,
@@ -625,6 +627,57 @@ async def _engagement_players(
         )
         for account, name, n, dealt, taken, knocked, died in rows
     ]
+
+
+@router.get("/matches/{match_id}/engagements", response_model=MatchEngagements)
+async def match_engagements(session: SessionDep, match_id: str) -> MatchEngagements:
+    """Every exchange in one match, for the replay's fight list.
+
+    Unfiltered — bots, opponents, everyone. The replay narrows to the followed
+    player in the browser, because following someone has to feel instant and a
+    round trip per click would not. ~116 rows per match.
+
+    The alternative was deriving fights from `bundle.hits` client-side, which
+    would have been a **second segmentation with its own threshold**, silently
+    disagreeing with `/review/engagements` about how many fights a match had.
+    One model, one constant, reported with the rows.
+    """
+    e = Engagement.__table__
+    ep = EngagementParticipant.__table__
+
+    rows = (await session.execute(select(e).where(e.c.match_id == match_id))).mappings().all()
+
+    accounts: dict[int, list[str]] = {}
+    for seq, account in (
+        await session.execute(
+            select(ep.c.seq, ep.c.account_id)
+            .where(ep.c.match_id == match_id)
+            .order_by(ep.c.seq, ep.c.account_id)
+        )
+    ).all():
+        accounts.setdefault(int(seq), []).append(account)
+
+    return MatchEngagements(
+        gap_seconds=int(ENGAGEMENT_GAP_S),
+        engagements=[
+            MatchEngagementRow(
+                seq=int(r["seq"]),
+                t_start_s=float(r["t_start_s"]),
+                t_end_s=float(r["t_end_s"]),
+                team_a=int(r["team_a"]),
+                team_b=int(r["team_b"]),
+                x=r["x"],
+                y=r["y"],
+                kills_a=int(r["kills_a"]),
+                kills_b=int(r["kills_b"]),
+                knocks_a=int(r["knocks_a"]),
+                knocks_b=int(r["knocks_b"]),
+                third_party_team_id=r["third_party_team_id"],
+                accounts=accounts.get(int(r["seq"]), []),
+            )
+            for r in sorted(rows, key=lambda r: r["t_start_s"])
+        ],
+    )
 
 
 @router.get("/review/deaths", response_model=SquadDeaths)

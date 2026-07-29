@@ -794,3 +794,101 @@ async def test_footnote_counts_are_counts_not_rates(deaths: dict) -> None:
     for key in ("inVehicle", "parachuting", "outsideAnyFight"):
         assert isinstance(deaths[key], int)
         assert 0 <= deaths[key] <= deaths["deaths"]
+
+
+# ---------------------------------------------------------------------------
+# per-match engagements — the replay's fight list
+# ---------------------------------------------------------------------------
+@pytest_asyncio.fixture
+async def match_fights(client: httpx.AsyncClient) -> dict:
+    async with get_session() as session:
+        match_id = await session.scalar(
+            text(
+                "SELECT match_id FROM engagements"
+                " GROUP BY match_id ORDER BY count(*) DESC LIMIT 1"
+            )
+        )
+    if not match_id:
+        pytest.skip("no engagements in the archive — reparse at v16 or later")
+    r = await client.get(f"/api/matches/{match_id}/engagements")
+    assert r.status_code == 200
+    body = r.json()
+    body["_matchId"] = match_id
+    return body
+
+
+async def test_match_engagements_carry_the_gap(match_fights: dict) -> None:
+    """The replay panel prints it in a tooltip, so it has to arrive.
+
+    Same rule as `/review/engagements`: these rows are a grouping the parser
+    invents, and a client that hard-coded 20 would disagree with the parser the
+    day someone changed one and not the other.
+    """
+    assert match_fights["gapSeconds"] == int(ENGAGEMENT_GAP_S)
+
+
+async def test_match_engagements_are_in_time_order(match_fights: dict) -> None:
+    starts = [e["tStartS"] for e in match_fights["engagements"]]
+    assert starts == sorted(starts)
+
+
+async def test_every_engagement_lists_its_participants(match_fights: dict) -> None:
+    """`accounts` is what the browser filters on, so an empty one is a fight
+    that can never be attributed to anyone and would silently vanish from every
+    player's list."""
+    for e in match_fights["engagements"]:
+        assert e["accounts"], f"engagement {e['seq']} has no participants"
+        assert len(set(e["accounts"])) == len(e["accounts"])
+
+
+async def test_unknown_match_returns_an_empty_list_not_an_error(
+    client: httpx.AsyncClient,
+) -> None:
+    """A match parsed before v16 genuinely has no engagements.
+
+    404 would be wrong — the match exists and the answer is "none" — and the
+    replay panel says "no fight data for this match" rather than dressing it up
+    as a failure.
+    """
+    r = await client.get("/api/matches/00000000-0000-0000-0000-000000000000/engagements")
+    assert r.status_code == 200
+    assert r.json()["engagements"] == []
+
+
+async def test_participants_reconcile_with_the_engagement_table(
+    match_fights: dict,
+) -> None:
+    """Re-derived with different SQL than the endpoint's two queries.
+
+    The endpoint fetches engagements and participants separately and joins them
+    in Python on `seq`. If that join ever slipped, every fight would list the
+    wrong players — and a plausible list of names is exactly the kind of wrong
+    that survives a glance.
+    """
+    async with get_session() as session:
+        rows = (
+            await session.execute(
+                text(
+                    "SELECT e.seq, count(p.account_id) FROM engagements e"
+                    " LEFT JOIN engagement_participants p"
+                    "   ON p.match_id = e.match_id AND p.seq = e.seq"
+                    " WHERE e.match_id = :m GROUP BY e.seq"
+                ),
+                {"m": match_fights["_matchId"]},
+            )
+        ).all()
+    expected = {int(seq): int(n) for seq, n in rows}
+    for e in match_fights["engagements"]:
+        assert len(e["accounts"]) == expected[e["seq"]]
+
+
+async def test_the_team_columns_are_ordered_low_first(match_fights: dict) -> None:
+    """`teamA < teamB` always — the browser resolves "our side" against it.
+
+    `lib/replayCombat.ts` reads `killsA` as ours only when the followed
+    player's team equals `teamA`. If the ordering were not guaranteed the
+    fallback would silently attribute every kill to the wrong side, and the
+    fight list would still look entirely reasonable.
+    """
+    for e in match_fights["engagements"]:
+        assert e["teamA"] < e["teamB"]

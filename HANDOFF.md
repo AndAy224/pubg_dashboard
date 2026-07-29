@@ -2504,3 +2504,109 @@ index, nothing for `HAND_MANAGED_INDEXES`). Backend **977 passed, 1 skipped**,
 Built, then driven in a real browser: `/review` with no page errors, no failed
 requests, no sideways scroll, and a generated `?follow=` link opening the
 replay seeked to the right moment on the right player.
+
+---
+
+## 34. The replay as a review tool — added 2026-07-29
+
+Phase 6, and the last of the gameplay-review plan. No parser change, no
+migration, no reparse: everything here was already on the wire.
+
+### 34.1 `bundle.hits` was shipped for a dozen versions and never shown
+
+The bundle has carried every attributed hit since **parser v4** — both
+endpoints, damage, body part, weapon — and the renderer used it for one thing:
+colouring tracers. The numbers were in the browser's memory and nothing printed
+them.
+
+The combat panel now does. While following a player it shows their damage
+dealt and taken, and a per-hit log with range, weapon and a headshot marker.
+Range is computed from the two quantised endpoints; one Uint16 step is 12.5 cm
+on Erangel, which is why a tracer can be drawn at all and why a range readout
+in metres is unaffected.
+
+Two details that would have been wrong the obvious way:
+
+- **Totals cover the whole match; only the rows are truncated.** A panel
+  showing forty rows above a total covering forty rows is quietly answering a
+  different question from the one it looks like it answers.
+- **The panel only exists while following someone.** Unfollowed it is a
+  hundred players' worth of hits, which is the tracer layer with extra steps.
+
+### 34.2 Fights come from the server, and that is the point
+
+The replay's fight list could have been derived from `bundle.hits` in the
+browser with about fifteen lines and no request. It is fetched from
+`GET /matches/{id}/engagements` instead.
+
+Segmenting in the browser would have been a **second model with its own
+threshold**, and the two would have disagreed about how many fights a match
+contained — `/review` saying one number and the replay another, both plausible,
+with nothing on either page to explain the gap. One model, one
+`ENGAGEMENT_GAP_S`, reported with the rows and printed in the panel's tooltip.
+
+The whole match's ~116 exchanges are fetched **once** and filtered in the
+browser. Following someone has to feel instant, and a round trip per click
+would not.
+
+`team_a`/`team_b` are ordered low-first and mean nothing on their own, so
+`fightsFor()` takes the followed player's team and resolves "our side" against
+it — the same thing `/review/engagements` does server-side. Passing the wrong
+team silently swaps every kill count and still produces a perfectly plausible
+fight list, so a test asserts the flip explicitly and another asserts the
+server's ordering guarantee.
+
+`fightResult()` describes the counts and never judges them — `2 down`,
+`lost 1`, `1–1 traded`, `no casualties`. `engagements` stores no verdict on
+purpose (§32.2) and the replay must not reintroduce what the schema refused; a
+vitest bans win/loss language from the output.
+
+### 34.3 Prev/next fight, and why it does not wrap
+
+Two buttons step through the followed player's exchanges. They **return null at
+the ends rather than wrapping**: pressing "next" at the last fight and landing
+back at the first reads as a seek failure, not as a feature. Disabled rather
+than hidden, for the same reason — a button that vanishes reads as a bug, one
+that greys out reads as "nothing that way".
+
+`stepFight` carries a one-second dead zone. The jump seeks four seconds before
+the first blow, which leaves `nowMs` *before* the fight's own start — so
+without it, pressing next immediately after a jump would re-select the fight
+you just landed on.
+
+The fight list shows only exchanges that have already started, matching the
+kill feed's "what has happened so far" rule, so the two panels can never
+disagree about what the playhead has reached.
+
+### 34.4 `?follow=` finally has a producer
+
+`Replay.tsx` has parsed `?follow=<accountId>` since the replay shipped and
+**nothing in the app ever generated one** — the only way to watch a specific
+player was to open a replay and hunt for them in a hundred-row team list.
+
+Now: every death row on `/review` (§33.5) and every kill-feed row on a match
+page. Both follow the **victim**, not the killer — the row describes a death,
+and the killer is frequently 200 m off-screen. Verified in a browser: 3 of 4
+replay links on a match page carry `follow`, the fourth being the "Watch
+replay" button, which correctly opens from the start.
+
+### 34.5 What is left from the plan
+
+The four small wins are still open and are genuinely small:
+
+- `/api/heatmap/kinds` exists and `Heatmaps.tsx` hard-codes its seven kinds.
+- `components/ui.tsx`'s `Tile` has a `tone` prop for inverted-polarity deltas
+  that no caller passes, so a placement delta would render green for getting
+  worse.
+- `SquadTable` truncates at 20 rows and `WeaponsTable` at 8, with no sort or
+  pagination.
+- Strategy has map/mode/date filters only on the drop panel.
+
+### Verified
+
+No migration, no reparse — nothing in this phase touches the parser. Backend
+**983 passed, 1 skipped**, `ruff` clean. Frontend `npm run check` green — 268
+tests across 18 files. Built, then driven in a real browser: all seven pages
+with no page errors, no failed requests and no sideways scroll, and a generated
+`?follow=` link opening the replay with the combat panel populated — 252 damage
+dealt, three fights, per-hit log with ranges and a headshot marker.

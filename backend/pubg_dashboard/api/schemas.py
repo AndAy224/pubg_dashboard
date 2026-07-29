@@ -1056,3 +1056,47 @@ class SquadDeaths(ApiModel):
     outside_any_fight: int
 
     rows: list[DeathListRow]
+
+
+class MatchEngagementRow(ApiModel):
+    """One exchange in one match, for the replay's fight list.
+
+    Carries `accounts` so the replay can filter to the followed player without
+    a second request per selection. A match has ~116 exchanges, so the whole
+    list is a few kilobytes and the alternative — refetching every time someone
+    clicks a different player — would put a request in the middle of an
+    interaction that has to feel instant.
+    """
+
+    seq: int
+    t_start_s: float
+    t_end_s: float
+    team_a: int
+    team_b: int
+    #: CENTIMETRES, midpoint of every hit endpoint. Null when the exchange was
+    #: knocks with no attributed hit behind them.
+    x: float | None
+    y: float | None
+    kills_a: int
+    kills_b: int
+    knocks_a: int
+    knocks_b: int
+    third_party_team_id: int | None
+    #: Everyone who dealt or took a blow. Bots included — they fight, and the
+    #: replay draws them.
+    accounts: list[str]
+
+
+class MatchEngagements(ApiModel):
+    """Every exchange in one match.
+
+    **`gap_seconds` travels with it**, exactly as it does on
+    `SquadEngagements`: these rows are a grouping the parser invents, and the
+    replay panel says so rather than presenting a fight count as a wire fact.
+
+    An empty list is a real answer — a match parsed before v16 has no rows —
+    and the frontend must not dress it up as an error.
+    """
+
+    gap_seconds: int
+    engagements: list[MatchEngagementRow]

@@ -2,10 +2,17 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { useQuery } from '@tanstack/react-query'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import { ApiError, get, getBytes } from '../api/client'
-import type { MatchDetail, PlayerCard, TileInfo } from '../api/types'
+import type { MatchDetail, MatchEngagements, PlayerCard, TileInfo } from '../api/types'
 import { decodeBundle, dictName, NULL_PLAYER } from '../lib/replayBundle'
 import type { ReplayBundle } from '../lib/replayBundle'
 import { duration, gameMode, itemName, weaponName } from '../lib/format'
+import {
+  damageLog,
+  fightResult,
+  fightsFor,
+  seekFor,
+  stepFight,
+} from '../lib/replayCombat'
 import { hex, teamColour, BOT_COLOUR } from '../lib/palette'
 import { playerColour, registerPlayers } from '../lib/players'
 import { ReplayCanvas } from '../replay/ReplayCanvas'
@@ -46,6 +53,15 @@ export function Replay() {
     queryKey: ['replay', matchId],
     queryFn: async () => decodeBundle(await getBytes(`/matches/${matchId}/replay`)),
     staleTime: Infinity, // immutable for a given parser version
+  })
+
+  // The whole match's exchanges, fetched once. ~116 rows, and filtering to the
+  // followed player happens in the browser — a request in the middle of
+  // clicking a name would make following someone feel broken.
+  const fights = useQuery({
+    queryKey: ['engagements', matchId],
+    queryFn: () => get<MatchEngagements>(`/matches/${matchId}/engagements`),
+    staleTime: Infinity,
   })
 
   const tracked = useMemo(() => {
@@ -188,6 +204,16 @@ export function Replay() {
         )}
       </div>
       <aside className="rail">
+        {/* Only while following someone. Unfollowed it would be a hundred
+            players' worth of hits, which is the tracer layer with extra steps. */}
+        {ready && follow !== null && (
+          <CombatPanel
+            bundle={bundle}
+            playerIndex={follow}
+            engagements={fights.data}
+            renderer={rendererRef}
+          />
+        )}
         {ready && <KillFeed bundle={bundle} renderer={rendererRef} tracked={tracked} />}
         <TeamList bundle={bundle} tracked={tracked} follow={follow} onFollow={onFollow} />
       </aside>
@@ -348,6 +374,135 @@ function Controls({
           </button>
         ))}
         <button onClick={() => renderer.current?.fit()} title="fit (F)">⤢</button>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * The followed player's fights and their damage, side by side.
+ *
+ * Both halves were already on the wire and neither was ever shown.
+ * `bundle.hits` has carried every attributed hit — damage, body part, weapon,
+ * both endpoints — since parser v4 and existed only to colour tracers; the
+ * match's exchanges have been in SQL since v16 with no way to jump to one.
+ *
+ * Subscribes to the store itself, like every other panel, so the playhead does
+ * not re-render the page at 10 Hz.
+ */
+function CombatPanel({
+  bundle,
+  playerIndex,
+  engagements,
+  renderer,
+}: {
+  bundle: ReplayBundle
+  playerIndex: number
+  engagements: MatchEngagements | undefined
+  renderer: React.RefObject<Renderer | null>
+}) {
+  const s = useReplayState()
+  const player = bundle.players[playerIndex]
+
+  const fights = useMemo(
+    () => fightsFor(engagements, player?.a ?? '', player?.t ?? -1),
+    [engagements, player?.a, player?.t],
+  )
+  const { rows, totals } = useMemo(
+    () => damageLog(bundle, playerIndex, s.nowMs),
+    [bundle, playerIndex, s.nowMs],
+  )
+
+  const jump = (dir: 1 | -1) => {
+    const next = stepFight(fights, s.nowMs, dir)
+    if (next) renderer.current?.seek(seekFor(next))
+  }
+
+  // Fights already started, newest first — the same "what has happened so far"
+  // rule the kill feed follows, so the two panels never disagree about what
+  // the playhead has reached.
+  const past = fights.filter((f) => f.startMs <= s.nowMs).reverse()
+
+  return (
+    <div className="panel panel-combat">
+      <h3>
+        {player?.n}
+        <span className="faint small"> · combat</span>
+      </h3>
+
+      <div className="combat-totals">
+        <span className="dealt num" title="damage dealt so far">
+          {Math.round(totals.dealt)}
+          <span className="faint"> dealt</span>
+        </span>
+        <span className="taken num" title="damage taken so far">
+          {Math.round(totals.taken)}
+          <span className="faint"> taken</span>
+        </span>
+        <div className="spacer" />
+        {/* Disabled rather than hidden at the ends: a button that vanishes
+            reads as a bug, one that greys out reads as "nothing that way". */}
+        <button
+          onClick={() => jump(-1)}
+          disabled={!stepFight(fights, s.nowMs, -1)}
+          title="previous fight"
+        >
+          ‹
+        </button>
+        <span className="faint small">{fights.length} fights</span>
+        <button
+          onClick={() => jump(1)}
+          disabled={!stepFight(fights, s.nowMs, 1)}
+          title="next fight"
+        >
+          ›
+        </button>
+      </div>
+
+      {engagements && engagements.engagements.length === 0 && (
+        // A real answer, not an error: matches parsed before v16 have none.
+        <div className="faint small">no fight data for this match</div>
+      )}
+
+      {past.length > 0 && (
+        <div className="fight-list scroll">
+          {past.map((f) => (
+            <button
+              key={f.seq}
+              className="fight-row"
+              onClick={() => renderer.current?.seek(seekFor(f))}
+              title={`jump to this fight (grouped at a ${engagements?.gapSeconds ?? 20} s gap)`}
+            >
+              <span className="faint num">{duration(f.startMs / 1000)}</span>
+              <span style={{ color: hex(teamColour(f.opponentTeam)) }}>
+                vs {f.opponentTeam}
+              </span>
+              <span className={f.ours > f.theirs ? 'good' : f.theirs > 0 ? 'bad' : 'faint'}>
+                {fightResult(f)}
+              </span>
+              {f.thirdPartyTeam !== null && <span className="tag">3rd party</span>}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <div className="dmg-list scroll">
+        {rows.map((r, i) => (
+          <div key={`${r.tMs}-${i}`} className={`dmg-row ${r.dealt ? 'dealt' : 'taken'}`}>
+            <span className="faint num">{duration(r.tMs / 1000)}</span>
+            <span className="num">
+              {r.dealt ? '+' : '−'}
+              {r.damage}
+            </span>
+            <span className="dmg-who">{bundle.players[r.other]?.n ?? '?'}</span>
+            <span className="faint small">{Math.round(r.rangeM)} m</span>
+            <span className="faint small">{weaponName(r.weapon)}</span>
+            {/* Only when it says something. "TorsoShot" on every second row is
+                noise; a headshot is the reason the row is worth reading. */}
+            {r.reason === 'HeadShot' && <span className="tag head">head</span>}
+          </div>
+        ))}
+        {rows.length === 0 && <div className="faint small">no hits yet</div>}
       </div>
     </div>
   )

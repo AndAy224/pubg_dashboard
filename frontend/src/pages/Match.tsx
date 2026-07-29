@@ -213,9 +213,15 @@ export function Match() {
                 >
                   <td className="num faint">
                     {m.hasReplay ? (
+                      // `follow` is the **victim**, not the killer: this row
+                      // is a death, and the replay opens on the person it
+                      // happened to, with their loadout and damage log. The
+                      // killer is often off-screen at 200 m.
                       <Link
-                        to={`/matches/${matchId}/replay?t=${Math.floor(k.tS)}`}
-                        title="jump to this moment in the replay"
+                        to={`/matches/${matchId}/replay?t=${Math.floor(k.tS)}${
+                          k.victimAccountId ? `&follow=${encodeURIComponent(k.victimAccountId)}` : ''
+                        }`}
+                        title="jump to this moment in the replay, following the victim"
                       >
                         {duration(k.tS)}
                       </Link>

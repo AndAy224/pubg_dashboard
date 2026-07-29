@@ -218,3 +218,39 @@
 .replay .crate-items { display: grid; gap: 3px; font-size: 12px; list-style: none; }
 .replay .crate-items li { display: flex; gap: 8px; align-items: baseline; }
 .replay .crate-items li span:first-child { flex: 1; }
+
+/* --- combat panel: the followed player's fights and hits ----------------- */
+/* Both halves shipped in the bundle for a dozen parser versions and were only
+   ever used to colour tracers. Shown only while following someone — unfollowed
+   this is a hundred players' worth of hits. */
+.replay .panel-combat { flex: 0 1 auto; max-height: 46%; }
+
+.replay .combat-totals {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px; margin-bottom: 8px; flex: 0 0 auto;
+}
+.replay .combat-totals .dealt { color: var(--good); }
+.replay .combat-totals .taken { color: var(--bad); }
+.replay .combat-totals button {
+  background: none; border: 1px solid var(--border); color: inherit;
+  border-radius: 3px; padding: 0 6px; cursor: pointer; line-height: 18px;
+}
+.replay .combat-totals button:disabled { opacity: 0.3; cursor: default; }
+
+.replay .fight-list { display: grid; gap: 2px; font-size: 12px; flex: 0 1 auto; margin-bottom: 8px; }
+.replay .fight-row {
+  display: grid; grid-template-columns: 42px 56px 1fr auto; gap: 6px; align-items: center;
+  background: none; border: none; color: inherit; text-align: left;
+  border-radius: 3px; padding: 2px 4px; cursor: pointer;
+}
+.replay .fight-row:hover { background: var(--bg-hover); }
+
+.replay .dmg-list { display: grid; gap: 2px; font-size: 11px; flex: 1 1 auto; }
+.replay .dmg-row {
+  display: grid; grid-template-columns: 42px 34px 1fr auto auto auto; gap: 6px;
+  align-items: center; padding: 1px 4px; border-radius: 3px;
+}
+.replay .dmg-row.dealt { border-left: 2px solid var(--good); }
+.replay .dmg-row.taken { border-left: 2px solid var(--bad); }
+.replay .dmg-who { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.replay .tag.head { background: var(--bg-hover); padding: 0 4px; border-radius: 2px; }
