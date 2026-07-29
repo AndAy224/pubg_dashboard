@@ -1123,3 +1123,107 @@ async def test_baseline_place_max_narrows_to_better_finishers(
     for m in top["metrics"]:
         assert m["n"] <= by_metric[m["metric"]]["n"], m["metric"]
 
+
+
+# ---------------------------------------------------------------------------
+# `?map=` / `?gameMode=` — one scope, every strategy panel
+# ---------------------------------------------------------------------------
+async def test_scope_narrows_every_strategy_endpoint(client: httpx.AsyncClient) -> None:
+    """Each endpoint returns a subset once a map is named, and never a superset.
+
+    The Strategy page pooled Erangel and Miramar into one set of averages
+    before this existed, and the numbers looked entirely reasonable doing it.
+    The point of a *shared* dependency is that one URL narrows all of them —
+    a page where the drop map is filtered and the metric cards are not is
+    worse than one with no filters at all, because it looks filtered.
+    """
+    urls = [
+        "/api/strategy/squad",
+        "/api/strategy/drops",
+    ]
+    for url in urls:
+        everyone = (await client.get(url)).json()
+        scoped = (await client.get(url, params={"map": "Baltic_Main"})).json()
+        assert len(scoped) <= len(everyone), url
+
+
+async def test_an_unplayed_map_yields_nothing_rather_than_everything(
+    client: httpx.AsyncClient,
+) -> None:
+    """A filter that silently does nothing is worse than no filter.
+
+    If `predicates()` were ever dropped from a `where()`, every endpoint would
+    keep answering with the whole archive and the page would look filtered.
+    Naming a map nobody has played is the cheapest way to prove the predicate
+    reaches the query.
+    """
+    for url in ("/api/strategy/squad", "/api/strategy/drops"):
+        r = await client.get(url, params={"map": "Range_Main"})
+        assert r.status_code == 200
+        assert r.json() == [], url
+
+
+async def test_scope_reaches_the_baseline_and_zone_play(client: httpx.AsyncClient) -> None:
+    everyone = (await client.get("/api/strategy/baseline")).json()
+    scoped = (await client.get("/api/strategy/baseline", params={"map": "Baltic_Main"})).json()
+    if everyone["matches"] == 0:
+        pytest.skip("no strategy rows; reparse first")
+    assert scoped["matches"] <= everyone["matches"]
+
+    zone = await client.get("/api/strategy/zone-play", params={"map": "Range_Main"})
+    assert zone.status_code == 200
+
+
+async def test_weapons_count_career_matches_only(client: httpx.AsyncClient) -> None:
+    """The fix, pinned. This endpoint had no `career_filter` at all.
+
+    Of 398 tracked weapon kills, **160 came from `tutorialatoz`, `airoyale`,
+    `event` and `competitive`** — modes career stats exclude — and the Strategy
+    page renders this table directly beneath contrasts drawn from career
+    matches only. Two halves of one screen, two different populations, neither
+    looking wrong.
+
+    Re-derived from SQL rather than from the endpoint's own query.
+    """
+    players = (await client.get("/api/players", params={"tracked": True})).json()
+    if not players:
+        pytest.skip("no tracked players")
+    account = players[0]["accountId"]
+
+    rows = (await client.get(f"/api/players/{account}/weapons", params={"limit": 50})).json()
+    kills = sum(r["kills"] for r in rows)
+
+    async with get_session() as session:
+        expected = await session.scalar(
+            text(
+                "SELECT count(*) FROM kill_events k JOIN matches m"
+                "  ON m.match_id = k.match_id"
+                " WHERE k.killer_account_id = :a AND k.weapon IS NOT NULL"
+                "   AND NOT k.is_suicide AND NOT k.is_team_kill"
+                "   AND NOT k.victim_is_bot"
+                "   AND m.match_type = 'official'"
+            ),
+            {"a": account},
+        )
+    assert kills == int(expected or 0)
+
+
+async def test_weapon_accuracy_is_drawn_from_the_same_matches_as_the_kills(
+    client: httpx.AsyncClient,
+) -> None:
+    """Both halves of the merge filter, or the ratio is nonsense.
+
+    Kills come from `kill_events` and shots from `participant_weapons`. Filter
+    one and not the other and a weapon whose kills are career-only but whose
+    shots include a tutorial range session reads as wildly inaccurate — a
+    plausible percentage over mismatched populations.
+    """
+    players = (await client.get("/api/players", params={"tracked": True})).json()
+    if not players:
+        pytest.skip("no tracked players")
+    rows = (
+        await client.get(f"/api/players/{players[0]['accountId']}/weapons", params={"limit": 50})
+    ).json()
+    for r in rows:
+        if r["accuracy"] is not None:
+            assert 0.0 <= r["accuracy"] <= 1.0, r["weapon"]

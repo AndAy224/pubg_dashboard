@@ -2610,3 +2610,107 @@ tests across 18 files. Built, then driven in a real browser: all seven pages
 with no page errors, no failed requests and no sideways scroll, and a generated
 `?follow=` link opening the replay with the combat panel populated — 252 damage
 dealt, three fights, per-hit log with ranges and a headshot marker.
+
+---
+
+## 35. The four small wins — added 2026-07-29
+
+The leftovers listed in §34.5. Each removes a rough edge found while surveying
+the app; two of them turned out to be hiding a real defect.
+
+### 35.1 The weapons table was counting matches career stats exclude
+
+`/players/{id}/weapons` had **no `career_filter()` at all**. Of 398 tracked
+weapon kills, **160 came from `tutorialatoz`, `airoyale`, `event` and
+`competitive`** — and the Strategy page renders that table directly beneath
+contrasts computed over career matches only.
+
+Two halves of one screen describing two different populations, with nothing
+about either looking wrong. Found only because adding `?map=` required joining
+`matches`, which made the missing predicate obvious.
+
+Both halves of the endpoint now filter: kills from `kill_events` and shots from
+`participant_weapons`. Filtering one and not the other would be worse than
+neither — a weapon whose kills are career-only but whose shots include a
+tutorial range session reads as wildly inaccurate, and it is still a plausible
+percentage.
+
+**Numbers on the Player and Strategy pages moved as a result.** That is the fix
+working, not a regression.
+
+### 35.2 One scope for the whole Strategy page
+
+`api/deps.py` gains `MatchScope` — `?map=` and `?gameMode=`, both optional,
+both defaulting to everything — applied to `/players/{id}/strategy`,
+`/strategy/squad`, `/strategy/baseline`, `/strategy/zone-play`,
+`/players/{id}/weapons` and `/strategy/drops`. The aliases are the ones
+`/strategy/drops` shipped in Phase 2, so a URL that filtered one panel now
+filters all of them.
+
+That asymmetry was the actual problem. The drop map had a picker and nothing
+else on the page did, so a page showing Erangel clusters above
+Erangel-and-Miramar averages **looked filtered**. Worse than no filters at all.
+
+Two traps handled explicitly:
+
+- **The React Query key must contain the scope.** Without it the unfiltered
+  answer comes back from cache while the page displays the filter — filtered
+  chrome over unfiltered data, which is exactly the failure the filter was
+  added to prevent.
+- **`/strategy/drops` cannot honour "every map"**, and that is not a gap to
+  paper over: clustering pools coordinates, so two maps in one set puts
+  Miramar drops inside Erangel towns. It keeps its own picker only while the
+  page filter names no map, and hides it when one does. Two controls for one
+  value is how they end up disagreeing.
+
+Verified in a browser by driving the control: 194 player-matches → 68 for
+duo-fpp, and the drop panel from 83 squad drops to 35, in one interaction.
+
+### 35.3 Hard-coded lists of what the server supports
+
+`Heatmaps.tsx` hard-coded seven heatmap kinds while `/api/heatmap/kinds` had
+returned them all along, and two pages hard-coded a six-entry `MODES` array.
+
+The failure is one-directional and silent: an eighth kind would exist in the
+API, accumulate bins on every parse, and never appear; a mode nobody plays is
+offered forever. Both now come from the server — `/heatmap/kinds` and a new
+`/modes/played`, ordered by frequency so the first option is the one a filter
+is most likely to want.
+
+Only the **display labels** stay in the frontend, with a fallback that
+prettifies an unknown key. Rendering `blue_damage` is a bad label; not
+rendering it at all is a missing feature.
+
+### 35.4 `Tile`'s `tone` prop finally has a caller
+
+`components/ui.tsx` has carried `tone?: 'higher' | 'lower'` since the tiles
+were written, to invert the delta colour where smaller is better. **No caller
+ever passed it.** Average placement — the one metric on the home cards where
+lower is better — had no delta at all, so the prop sat unexercised waiting for
+someone to add one and get a green arrow for finishing worse.
+
+An arrow pointing the wrong way is worse than no arrow: it is read at a glance
+and believed. Average placement now shows its delta with `tone="lower"`.
+
+### 35.5 Sorting, and truncation that says so
+
+`SquadTable` sliced to 20 rows and `WeaponsTable` to 8, with nothing said about
+either — a table that silently drops 51 rows reads as a complete table. Both
+now have sortable headers and a `showing 8 of 34 · show all` control that
+states the count whether or not anything is hidden.
+
+The sort lives in `lib/sort.ts` because of one rule that is easy to get wrong:
+**nulls sort last in both directions.** Every numeric column here has a real
+"not measurable" case — a solo match has no teammate distance, a weapon nobody
+fired has no accuracy — and the default comparison puts nulls wherever
+coercion lands them. Descending, `null` behaves as 0 and sinks harmlessly;
+ascending, it rises to the top and "worst accuracy" is headed by a gun that was
+never fired. One direction correct and one wrong is precisely the failure that
+survives a glance, so it has its own test.
+
+### Verified
+
+No migration, no reparse. Backend **988 passed, 1 skipped**, `ruff` clean.
+Frontend `npm run check` green — 280 tests across 19 files. Built, then driven
+in a real browser: every page loads with no errors, and the Strategy filter was
+exercised end to end rather than assumed.

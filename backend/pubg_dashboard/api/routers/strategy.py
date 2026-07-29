@@ -18,7 +18,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Query
 from sqlalchemy import desc, func, select
 
-from pubg_dashboard.api.deps import career_filter
+from pubg_dashboard.api.deps import MatchScopeDep, career_filter
 from pubg_dashboard.api.schemas import (
     BaselineMetric,
     MatchStrategyRow,
@@ -56,7 +56,9 @@ def _metrics(sm: StrategyMetric) -> dict[str, object]:
 
 
 @router.get("/players/{account_id}/strategy", response_model=list[StrategyMatchRow])
-async def player_strategy(session: SessionDep, account_id: str) -> list[StrategyMatchRow]:
+async def player_strategy(
+    session: SessionDep, account_id: str, scope: MatchScopeDep
+) -> list[StrategyMatchRow]:
     """Per-official-match metric rows for one player, newest first.
 
     Inner join on `strategy_metrics`: a match parsed before parser v7 has no
@@ -70,7 +72,7 @@ async def player_strategy(session: SessionDep, account_id: str) -> list[Strategy
             (StrategyMetric.match_id == Participant.match_id)
             & (StrategyMetric.account_id == Participant.account_id),
         )
-        .where(Participant.account_id == account_id, career_filter())
+        .where(Participant.account_id == account_id, career_filter(), *scope.predicates())
         .order_by(desc(Match.played_at))
     )
     rows = (await session.execute(stmt)).all()
@@ -96,7 +98,7 @@ async def player_strategy(session: SessionDep, account_id: str) -> list[Strategy
 
 
 @router.get("/strategy/squad", response_model=list[SquadMatchRow])
-async def squad_strategy(session: SessionDep) -> list[SquadMatchRow]:
+async def squad_strategy(session: SessionDep, scope: MatchScopeDep) -> list[SquadMatchRow]:
     """Matches where at least two tracked players shared a team.
 
     This is the only place teammate-distance metrics mean "our squad" rather
@@ -125,7 +127,7 @@ async def squad_strategy(session: SessionDep) -> list[SquadMatchRow]:
             & (StrategyMetric.account_id == Participant.account_id),
         )
         .join(Player, Player.account_id == Participant.account_id)
-        .where(Player.tracked, career_filter())
+        .where(Player.tracked, career_filter(), *scope.predicates())
         .order_by(desc(Match.played_at))
     )
     rows = (await session.execute(stmt)).all()
@@ -175,6 +177,7 @@ async def match_strategy(session: SessionDep, match_id: str) -> list[MatchStrate
 @router.get("/strategy/baseline", response_model=StrategyBaseline)
 async def strategy_baseline(
     session: SessionDep,
+    scope: MatchScopeDep,
     place_max: Annotated[int | None, Query(alias="placeMax", ge=1, le=100)] = None,
 ) -> StrategyBaseline:
     """What the rest of the lobby does — the comparison the page never had.
@@ -231,7 +234,7 @@ async def strategy_baseline(
             & (Participant.account_id == StrategyMetric.account_id),
         )
         .join(Match, Match.match_id == StrategyMetric.match_id)
-        .where(career_filter(), *where)
+        .where(career_filter(), *scope.predicates(), *where)
     )
     row = (await session.execute(stmt)).one()
 
@@ -288,6 +291,7 @@ def _zone_rows(rows: Sequence[Any]) -> list[ZonePhaseRate]:
 @router.get("/strategy/zone-play", response_model=ZonePlaySummary)
 async def zone_play_summary(
     session: SessionDep,
+    scope: MatchScopeDep,
     place_max: Annotated[int | None, Query(alias="placeMax", ge=1, le=100)] = None,
 ) -> ZonePlaySummary:
     """Were we inside the next circle, phase by phase — and was the lobby?
@@ -302,7 +306,9 @@ async def zone_play_summary(
     would make late-phase discipline look worse the more the squad lost.
     """
     tracked = select(Player.account_id).where(Player.tracked).scalar_subquery()
-    career = select(Match.match_id).where(career_filter()).scalar_subquery()
+    career = (
+        select(Match.match_id).where(career_filter(), *scope.predicates()).scalar_subquery()
+    )
 
     base = (
         select(ZonePlay.phase, *_zone_rate_cols())

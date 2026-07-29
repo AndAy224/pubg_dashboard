@@ -19,12 +19,11 @@ cluster with 19 real drops into a confident-looking 48.
 from __future__ import annotations
 
 import math
-from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException
 from sqlalchemy import desc, func, select
 
-from pubg_dashboard.api.deps import career_filter
+from pubg_dashboard.api.deps import MatchScopeDep, career_filter
 from pubg_dashboard.api.schemas import DropRow, Gazetteer, PlaceCell
 from pubg_dashboard.db.models import Match, Participant, Player, StrategyMetric
 from pubg_dashboard.db.session import SessionDep
@@ -36,8 +35,7 @@ router = APIRouter(tags=["drops"])
 @router.get("/strategy/drops", response_model=list[DropRow])
 async def squad_drops(
     session: SessionDep,
-    map_name: Annotated[str | None, Query(alias="map")] = None,
-    game_mode: Annotated[str | None, Query(alias="gameMode")] = None,
+    scope: MatchScopeDep,
 ) -> list[DropRow]:
     """One row per squad landing, newest first.
 
@@ -85,10 +83,10 @@ async def squad_drops(
         )
         .order_by(desc(Match.played_at))
     )
-    if map_name:
-        stmt = stmt.where(Match.map_name == map_name)
-    if game_mode:
-        stmt = stmt.where(Match.game_mode == game_mode)
+    # The same `?map=`/`?gameMode=` every other aggregate takes. This endpoint
+    # shipped them first and defined the aliases; `MatchScope` adopted them so
+    # one URL filters the whole Strategy page rather than just this panel.
+    stmt = stmt.where(*scope.predicates())
 
     out: list[DropRow] = []
     for row in (await session.execute(stmt)).all():

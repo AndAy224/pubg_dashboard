@@ -243,3 +243,29 @@
   font-size: 14px;
   line-height: 1.5;
 }
+
+/* --- sortable headers and honest truncation ------------------------------ */
+/* `.slice(0, 20)` with nothing said about it reads as a complete table. */
+.strategy .sort-th {
+  background: none; border: none; padding: 0; color: inherit; font: inherit;
+  cursor: pointer; white-space: nowrap;
+}
+.strategy .sort-th:hover { color: var(--text); }
+
+.strategy .show-all {
+  display: flex; align-items: center; gap: 8px;
+  margin-top: 6px;
+}
+.strategy .show-all button {
+  background: none; border: 1px solid var(--border); color: inherit;
+  border-radius: 3px; padding: 1px 8px; font-size: 12px; cursor: pointer;
+}
+
+/* --- page-level scope filters -------------------------------------------- */
+/* One scope, every panel. The drops map picker shipped first and filtered only
+   itself, so the page looked filtered while its averages pooled every map. */
+.strategy .filters { gap: 12px; align-items: center; }
+.strategy .filters label {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12px; color: var(--text-dim);
+}

@@ -148,6 +148,13 @@ function PlayerCardView({ summary }: { summary: PlayerSummary }) {
     recent && previous ? recent.kdHuman - previous.kdHuman : null
   const dmgDelta =
     recent && previous ? recent.avgDamage - previous.avgDamage : null
+  // **Lower is better here**, which is the whole reason `Tile` has a `tone`.
+  // The prop existed with no caller, so the first placement delta anyone added
+  // would have rendered green for finishing worse — an arrow pointing the
+  // wrong way is worse than no arrow, because it is read at a glance and
+  // believed.
+  const placeDelta =
+    recent && previous ? recent.avgPlace - previous.avgPlace : null
 
   return (
     <div className="card player-card" style={{ borderTopColor: colour }}>
@@ -181,6 +188,8 @@ function PlayerCardView({ summary }: { summary: PlayerSummary }) {
               label="Avg place"
               value={`#${stats.avgPlace.toFixed(1)}`}
               sub={`best #${stats.bestPlace}`}
+              delta={placeDelta}
+              tone="lower"
             />
             <Tile
               label="Avg dmg"

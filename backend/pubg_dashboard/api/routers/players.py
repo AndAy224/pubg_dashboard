@@ -10,7 +10,7 @@ from sqlalchemy import Float, and_, cast, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from pubg_dashboard.api.deps import career_filter, kills_column
+from pubg_dashboard.api.deps import MatchScopeDep, career_filter, kills_column
 from pubg_dashboard.api.schemas import (
     MatchSummary,
     Nemesis,
@@ -432,21 +432,33 @@ async def player_matches(
 async def player_weapons(
     session: SessionDep,
     account_id: str,
+    scope: MatchScopeDep,
     include_bots: Annotated[bool, Query(alias="includeBots")] = False,
     limit: Annotated[int, Query(ge=1, le=50)] = 20,
 ) -> list[WeaponStat]:
-    """Weapon breakdown from `kill_events`.
+    """Weapon breakdown from `kill_events`, career matches only.
 
     `distance_cm = -1` is a "not applicable" sentinel (8.6% of kills), so it is
     filtered out of both the maximum and the average — otherwise every melee
     and vehicle kill drags the averages toward -1 and the longest-kill figure
     is meaningless.
+
+    **`career_filter()` was missing here and is not cosmetic.** This endpoint
+    counted every match type, so of 398 tracked weapon kills, **160 came from
+    `tutorialatoz`, `airoyale`, `event` and `competitive`** — modes career
+    stats exclude. The Strategy page renders this table directly beneath
+    contrasts drawn from career matches only, so the two halves of one screen
+    were describing different populations, and nothing about either looked
+    wrong. Both queries below now filter, so kills and accuracy stay drawn from
+    the same set as each other and as everything around them.
     """
     where = [
         KillEvent.killer_account_id == account_id,
         KillEvent.weapon.is_not(None),
         KillEvent.is_suicide.is_(False),
         KillEvent.is_team_kill.is_(False),
+        career_filter(),
+        *scope.predicates(),
     ]
     if not include_bots:
         where.append(KillEvent.victim_is_bot.is_(False))
@@ -461,6 +473,7 @@ async def player_weapons(
                 func.coalesce(func.max(KillEvent.distance_cm).filter(real_distance), 0.0),
                 func.coalesce(func.avg(KillEvent.distance_cm).filter(real_distance), 0.0),
             )
+            .join(Match, Match.match_id == KillEvent.match_id)
             .where(and_(*where))
             .group_by(KillEvent.weapon)
             .order_by(desc("kills"))
@@ -483,11 +496,17 @@ async def player_weapons(
                 func.sum(ParticipantWeapon.shots_landed).label("landed"),
                 func.sum(ParticipantWeapon.hit_events).label("hit_events"),
             )
+            .join(Match, Match.match_id == ParticipantWeapon.match_id)
             .where(
                 ParticipantWeapon.account_id == account_id,
                 # `''` is the 1.7% of attacks with no weapon id. Kept in the
                 # table so the totals reconcile, but it has no row to be.
                 ParticipantWeapon.weapon != "",
+                # The same population as the kills above. A weapon whose kills
+                # are career-only but whose shots include a tutorial range
+                # session reads as wildly inaccurate.
+                career_filter(),
+                *scope.predicates(),
             )
             .group_by(ParticipantWeapon.weapon)
         )

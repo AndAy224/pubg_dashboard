@@ -21,10 +21,19 @@ import { circleGaps, circleSentence, rateOf } from '../lib/zone'
  * * **blue moves** — the blue has started closing on it. This is the
  *   rotation deadline, and being outside here is what costs a squad the game.
  */
-export function StrategyCircle() {
+export function StrategyCircle({
+  scope,
+  scopeKey,
+}: {
+  /** `?map=` / `?gameMode=`, from the page-level filter. */
+  scope: Record<string, string>
+  /** Part of the query key, or React Query serves the unfiltered answer from
+   *  cache and the panel silently ignores the filter above it. */
+  scopeKey: string
+}) {
   const zone = useQuery({
-    queryKey: ['strategy', 'zone-play'],
-    queryFn: () => get<ZonePlaySummary>('/strategy/zone-play'),
+    queryKey: ['strategy', 'zone-play', scopeKey],
+    queryFn: () => get<ZonePlaySummary>('/strategy/zone-play', scope),
     staleTime: 5 * 60_000,
   })
 

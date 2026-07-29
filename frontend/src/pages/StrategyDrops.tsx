@@ -20,15 +20,29 @@ import { dateTime, duration, num } from '../lib/format'
  * Where no name is near, the spot says so and gives a bearing to the nearest
  * one rather than borrowing its name.
  */
-export function StrategyDrops({ maps }: { maps: MapInfo[] | undefined }) {
-  // Erangel unless the archive says otherwise: it is 92 of 97 matches, and
-  // pooling two maps' coordinates would cluster Miramar into Erangel.
-  const [mapName, setMapName] = useState<string>('Baltic_Main')
+export function StrategyDrops({
+  maps,
+  map,
+  mode,
+}: {
+  maps: MapInfo[] | undefined
+  /** The page filter's map, or `''` for "every map". */
+  map: string
+  mode: string
+}) {
+  // **This panel cannot honour "every map"**, and that is not a limitation to
+  // work around — clustering pools coordinates, so two maps in one set puts
+  // Miramar drops inside Erangel towns. When the page filter names no map this
+  // keeps its own picker and says so; when it does, it follows it and the
+  // local picker disappears rather than sitting there disagreeing.
+  const [fallback, setFallback] = useState<string>('Baltic_Main')
+  const mapName = map || fallback
   const [selected, setSelected] = useState<string | null>(null)
 
   const drops = useQuery({
-    queryKey: ['drops', mapName],
-    queryFn: () => get<DropRow[]>('/strategy/drops', { map: mapName }),
+    queryKey: ['drops', mapName, mode],
+    queryFn: () =>
+      get<DropRow[]>('/strategy/drops', { map: mapName, ...(mode ? { gameMode: mode } : {}) }),
     staleTime: 5 * 60_000,
   })
 
@@ -69,8 +83,10 @@ export function StrategyDrops({ maps }: { maps: MapInfo[] | undefined }) {
       <div className="row" style={{ marginBottom: 8 }}>
         <h3>Where we drop</h3>
         <span className="spacer" />
-        {played.length > 1 && (
-          <select value={mapName} onChange={(e) => setMapName(e.target.value)}>
+        {/* Only when the page filter has not already chosen. Two pickers for
+            one value is how they end up disagreeing. */}
+        {!map && played.length > 1 && (
+          <select value={mapName} onChange={(e) => setFallback(e.target.value)}>
             {played.map((m) => (
               <option key={m.mapName} value={m.mapName}>
                 {m.display}

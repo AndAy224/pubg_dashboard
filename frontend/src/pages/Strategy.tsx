@@ -13,6 +13,7 @@ import type {
 import { Place, Skeleton } from '../components/ui'
 import { dateTime, distance, duration, gameMode, num, weaponName } from '../lib/format'
 import { contrastByPlacement, mergeWeapons, type Contrast } from '../lib/strategy'
+import { nextSort, sortGlyph, sortRows, type SortDir } from '../lib/sort'
 import { playerColourHex, registerPlayers } from '../lib/players'
 import { StrategyCircle } from './StrategyCircle'
 import { StrategyDrops } from './StrategyDrops'
@@ -151,6 +152,24 @@ export function Strategy() {
   // this page exists to answer; individual players are one click away.
   const [selected, setSelected] = useState<string>(COMBINED)
 
+  // `''` is "every map" / "every mode", and it is deliberately not a sentinel:
+  // the query-string builder drops empty parameters, so an unset filter is an
+  // absent parameter, which is exactly what the API's optional scope means.
+  //
+  // **One scope, every panel.** The drops map shipped its own map picker in
+  // Phase 2 and nothing else on the page was filtered — so a page showing
+  // Erangel drops above Erangel-and-Miramar averages looked filtered and was
+  // not. `MatchScope` on the backend exists for this.
+  const [mapName, setMapName] = useState('')
+  const [mode, setMode] = useState('')
+  const scope = useMemo(
+    () => ({ ...(mapName ? { map: mapName } : {}), ...(mode ? { gameMode: mode } : {}) }),
+    [mapName, mode],
+  )
+  // Part of every query key, or React Query serves the unfiltered answer from
+  // cache and the page silently ignores the filter it is displaying.
+  const scopeKey = `${mapName}|${mode}`
+
   useEffect(() => {
     document.title = 'Strategy · PUBG dashboard'
   }, [])
@@ -170,9 +189,9 @@ export function Strategy() {
 
   const rowQueries = useQueries({
     queries: ids.map((id) => ({
-      queryKey: ['strategy', id],
+      queryKey: ['strategy', id, scopeKey],
       queryFn: async (): Promise<Row[]> =>
-        (await get<StrategyMatchRow[]>(`/players/${id}/strategy`)).map((r) => ({
+        (await get<StrategyMatchRow[]>(`/players/${id}/strategy`, scope)).map((r) => ({
           ...r,
           accountId: id,
         })),
@@ -180,20 +199,20 @@ export function Strategy() {
   })
   const weaponQueries = useQueries({
     queries: ids.map((id) => ({
-      queryKey: ['weapons', id],
-      queryFn: () => get<WeaponStat[]>(`/players/${id}/weapons`),
+      queryKey: ['weapons', id, scopeKey],
+      queryFn: () => get<WeaponStat[]>(`/players/${id}/weapons`, scope),
     })),
   })
   const squad = useQuery({
-    queryKey: ['strategy', 'squad'],
-    queryFn: () => get<SquadMatchRow[]>('/strategy/squad'),
+    queryKey: ['strategy', 'squad', scopeKey],
+    queryFn: () => get<SquadMatchRow[]>('/strategy/squad', scope),
   })
 
   // The rest of the lobby, from rows the parser has always written for every
   // participant and every endpoint here has always filtered away.
   const baseline = useQuery({
-    queryKey: ['strategy', 'baseline'],
-    queryFn: () => get<StrategyBaseline>('/strategy/baseline'),
+    queryKey: ['strategy', 'baseline', scopeKey],
+    queryFn: () => get<StrategyBaseline>('/strategy/baseline', scope),
     staleTime: 5 * 60_000,
   })
 
@@ -202,6 +221,15 @@ export function Strategy() {
     queryFn: () => get<MapInfo[]>('/maps/played'),
     staleTime: 60 * 60_000,
   })
+  // From the archive, not a hard-coded array. Three pages carried their own
+  // six-entry `MODES` list, so a mode nobody plays was offered and a new one
+  // would never appear. Most-played first.
+  const modeQuery = useQuery({
+    queryKey: ['modes', 'played'],
+    queryFn: () => get<string[]>('/modes/played'),
+    staleTime: 60 * 60_000,
+  })
+  const modes = modeQuery.data ?? []
 
   const combined = selected === COMBINED
   const loading =
@@ -246,6 +274,43 @@ export function Strategy() {
         ))}
       </div>
 
+      <div className="row filters">
+        <label>
+          Map
+          <select value={mapName} onChange={(e) => setMapName(e.target.value)}>
+            <option value="">every map</option>
+            {(maps.data ?? []).map((m) => (
+              <option key={m.mapName} value={m.mapName}>
+                {m.display}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Mode
+          <select value={mode} onChange={(e) => setMode(e.target.value)}>
+            <option value="">every mode</option>
+            {modes.map((g) => (
+              <option key={g} value={g}>
+                {gameMode(g)}
+              </option>
+            ))}
+          </select>
+        </label>
+        {(mapName || mode) && (
+          <button
+            onClick={() => {
+              setMapName('')
+              setMode('')
+            }}
+          >
+            clear
+          </button>
+        )}
+        <span className="spacer" />
+        <span className="faint small">every panel below is filtered</span>
+      </div>
+
       <p className="note">
         Each card contrasts the <strong>best-placed</strong> matches against the{' '}
         <strong>worst-placed</strong> ones (official matches only)
@@ -284,9 +349,9 @@ export function Strategy() {
         </div>
       )}
 
-      <StrategyCircle />
+      <StrategyCircle scope={scope} scopeKey={scopeKey} />
 
-      <StrategyDrops maps={maps.data} />
+      <StrategyDrops maps={maps.data} map={mapName} mode={mode} />
 
       <div className="split">
         <section className="card">
@@ -456,7 +521,91 @@ function ScatterStrip({
   )
 }
 
+/** Mean of a per-player metric across a squad row, or null when none reported. */
+function squadMean(r: SquadMatchRow, pick: (p: SquadMatchRow['players'][number]) => number | null) {
+  const vals = r.players.map(pick).filter((v): v is number => v !== null)
+  return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null
+}
+
+/**
+ * A clickable column header.
+ *
+ * Kept here rather than in `components/ui.tsx` because both callers are in
+ * this file and the sort state shape is local to them.
+ */
+function SortTh({
+  label,
+  col,
+  sort,
+  onSort,
+  className,
+}: {
+  label: string
+  col: string
+  sort: { key: string; dir: SortDir }
+  onSort: (key: string) => void
+  className?: string
+}) {
+  return (
+    <th className={className}>
+      <button type="button" className="sort-th" onClick={() => onSort(col)}>
+        {label}
+        {sortGlyph(sort, col)}
+      </button>
+    </th>
+  )
+}
+
+/**
+ * "Showing 20 of 71 · show all".
+ *
+ * Replaces a bare `.slice(0, 20)`, which is the reason this exists: a table
+ * that silently drops 51 rows reads as a complete table. The count is stated
+ * whether or not anything is hidden, so "this is all of them" is also said out
+ * loud.
+ */
+function ShowAll({
+  shown,
+  total,
+  expanded,
+  onToggle,
+}: {
+  shown: number
+  total: number
+  expanded: boolean
+  onToggle: () => void
+}) {
+  if (total <= shown && !expanded) return null
+  return (
+    <div className="show-all faint small">
+      showing {expanded ? total : Math.min(shown, total)} of {total}
+      <button type="button" onClick={onToggle}>
+        {expanded ? 'show fewer' : 'show all'}
+      </button>
+    </div>
+  )
+}
+
+const SQUAD_PAGE = 20
+
 function SquadTable({ rows }: { rows: SquadMatchRow[] | undefined }) {
+  const [sort, setSort] = useState<{ key: string; dir: SortDir }>({
+    key: 'played',
+    dir: 'desc',
+  })
+  const [expanded, setExpanded] = useState(false)
+  const onSort = (key: string) => setSort((s) => nextSort(s, key))
+
+  const sorted = useMemo(() => {
+    const pick: Record<string, (r: SquadMatchRow) => number | string | null> = {
+      played: (r) => r.playedAt,
+      place: (r) => r.winPlace,
+      spread: (r) => squadMean(r, (p) => p.teammateDistAvgCm),
+      together: (r) => squadMean(r, (p) => p.teammateNearPct),
+    }
+    return sortRows(rows ?? [], pick[sort.key] ?? pick.played!, sort.dir)
+  }, [rows, sort])
+
   if (!rows) return <Skeleton h={120} />
   if (rows.length === 0) {
     return <div className="empty">no matches with two tracked players on one team yet</div>
@@ -479,20 +628,16 @@ function SquadTable({ rows }: { rows: SquadMatchRow[] | undefined }) {
       <table>
         <thead>
           <tr>
-            <th>Match</th>
-            <th>Place</th>
-            <th className="num">Spread</th>
-            <th className="num">Together</th>
+            <SortTh label="Match" col="played" sort={sort} onSort={onSort} />
+            <SortTh label="Place" col="place" sort={sort} onSort={onSort} />
+            <SortTh label="Spread" col="spread" sort={sort} onSort={onSort} className="num" />
+            <SortTh label="Together" col="together" sort={sort} onSort={onSort} className="num" />
           </tr>
         </thead>
         <tbody>
-          {rows.slice(0, 20).map((r) => {
-            const dists = r.players
-              .map((p) => p.teammateDistAvgCm)
-              .filter((v): v is number => v !== null)
-            const nears = r.players
-              .map((p) => p.teammateNearPct)
-              .filter((v): v is number => v !== null)
+          {(expanded ? sorted : sorted.slice(0, SQUAD_PAGE)).map((r) => {
+            const dist = squadMean(r, (p) => p.teammateDistAvgCm)
+            const near = squadMean(r, (p) => p.teammateNearPct)
             return (
               <tr key={r.matchId}>
                 <td>
@@ -503,41 +648,66 @@ function SquadTable({ rows }: { rows: SquadMatchRow[] | undefined }) {
                 <td>
                   <Place place={r.winPlace} />
                 </td>
-                <td className="num">
-                  {dists.length
-                    ? distance(dists.reduce((a, b) => a + b, 0) / dists.length / 100)
-                    : '—'}
-                </td>
-                <td className="num">
-                  {nears.length
-                    ? `${num((nears.reduce((a, b) => a + b, 0) / nears.length) * 100)}%`
-                    : '—'}
-                </td>
+                {/* Null, not zero — a solo match has no teammate to be far
+                    from, and `sortRows` keeps those rows off the top of an
+                    ascending sort for the same reason. */}
+                <td className="num">{dist === null ? '—' : distance(dist / 100)}</td>
+                <td className="num">{near === null ? '—' : `${num(near * 100)}%`}</td>
               </tr>
             )
           })}
         </tbody>
       </table>
+      <ShowAll
+        shown={SQUAD_PAGE}
+        total={sorted.length}
+        expanded={expanded}
+        onToggle={() => setExpanded((v) => !v)}
+      />
     </>
   )
 }
 
+const WEAPON_PAGE = 8
+
 function WeaponsTable({ rows }: { rows: WeaponStat[] | undefined }) {
+  const [sort, setSort] = useState<{ key: string; dir: SortDir }>({
+    key: 'kills',
+    dir: 'desc',
+  })
+  const [expanded, setExpanded] = useState(false)
+  const onSort = (key: string) => setSort((s) => nextSort(s, key))
+
+  const sorted = useMemo(() => {
+    const pick: Record<string, (w: WeaponStat) => number | string | null> = {
+      weapon: (w) => weaponName(w.weapon),
+      kills: (w) => w.kills,
+      // Zero shots means "never reported", which the `> 0 ? : '—'` below
+      // already renders as unmeasured — so it sorts as null, not as the
+      // lowest possible number.
+      shots: (w) => (w.shots > 0 ? w.shots : null),
+      accuracy: (w) => w.accuracy,
+      range: (w) => (w.kills > 0 ? w.avgDistanceM : null),
+    }
+    return sortRows(rows ?? [], pick[sort.key] ?? pick.kills!, sort.dir)
+  }, [rows, sort])
+
   if (!rows) return <Skeleton h={120} />
   if (rows.length === 0) return <div className="empty">nothing fired yet</div>
   return (
+    <>
     <table>
       <thead>
         <tr>
-          <th>Weapon</th>
-          <th className="num">Kills</th>
-          <th className="num">Shots</th>
-          <th className="num">Acc</th>
-          <th className="num">Avg range</th>
+          <SortTh label="Weapon" col="weapon" sort={sort} onSort={onSort} />
+          <SortTh label="Kills" col="kills" sort={sort} onSort={onSort} className="num" />
+          <SortTh label="Shots" col="shots" sort={sort} onSort={onSort} className="num" />
+          <SortTh label="Acc" col="accuracy" sort={sort} onSort={onSort} className="num" />
+          <SortTh label="Avg range" col="range" sort={sort} onSort={onSort} className="num" />
         </tr>
       </thead>
       <tbody>
-        {rows.slice(0, 8).map((w) => (
+        {(expanded ? sorted : sorted.slice(0, WEAPON_PAGE)).map((w) => (
           <tr key={w.weapon}>
             <td>{weaponName(w.weapon)}</td>
             <td className="num">{w.kills}</td>
@@ -552,5 +722,12 @@ function WeaponsTable({ rows }: { rows: WeaponStat[] | undefined }) {
         ))}
       </tbody>
     </table>
+    <ShowAll
+      shown={WEAPON_PAGE}
+      total={sorted.length}
+      expanded={expanded}
+      onToggle={() => setExpanded((v) => !v)}
+    />
+    </>
   )
 }

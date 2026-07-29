@@ -130,3 +130,26 @@ async def maps_played(session: SessionDep) -> list[MapInfo]:
         )
         for (name,) in rows
     ]
+
+
+@router.get("/modes/played", response_model=list[str])
+async def modes_played(session: SessionDep) -> list[str]:
+    """Game modes actually present in the archive, most-played first.
+
+    The same reasoning as `/maps/played`, and it exists for the same reason
+    `/heatmap/kinds` does: three pages hard-coded a six-entry `MODES` array,
+    so a mode nobody here plays was offered and a new one would not be.
+
+    Ordered by frequency rather than alphabetically — the first entry is the
+    one someone filtering is most likely to want, and an alphabetical list puts
+    `duo` above `squad-fpp` on an archive that is almost entirely the latter.
+    """
+    rows = (
+        await session.execute(
+            select(Match.game_mode)
+            .where(Match.game_mode != "")
+            .group_by(Match.game_mode)
+            .order_by(func.count().desc(), Match.game_mode)
+        )
+    ).all()
+    return [mode for (mode,) in rows]

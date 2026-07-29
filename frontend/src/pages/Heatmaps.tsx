@@ -7,16 +7,31 @@ import { MapView } from '../components/MapView'
 import { num } from '../lib/format'
 import { playerColour, registerPlayers } from '../lib/players'
 
-const KINDS = [
-  { key: 'landing', label: 'landings' },
-  { key: 'movement', label: 'movement' },
-  { key: 'kill', label: 'kills' },
-  { key: 'death', label: 'deaths' },
-  { key: 'knock', label: 'knocks' },
-  { key: 'care_package', label: 'care pkgs' },
-  { key: 'vehicle_destroy', label: 'vehicles' },
-]
-const MODES = ['squad-fpp', 'duo-fpp', 'solo-fpp', 'squad', 'duo', 'solo']
+/**
+ * Display names for the kinds `/heatmap/kinds` reports.
+ *
+ * **The list of kinds is not here** — it comes from the server, which is the
+ * only place that knows what it can actually render. This file used to hard-
+ * code all seven, so the day an eighth was added it would exist in the API,
+ * accumulate bins on every parse, and be invisible.
+ *
+ * A kind with no entry falls back to a prettified key rather than being
+ * dropped: appearing as `blue_damage` is a bad label, and not appearing at all
+ * is a missing feature.
+ */
+const KIND_LABELS: Record<string, string> = {
+  landing: 'landings',
+  movement: 'movement',
+  kill: 'kills',
+  death: 'deaths',
+  knock: 'knocks',
+  care_package: 'care pkgs',
+  vehicle_destroy: 'vehicles',
+}
+
+function kindLabel(key: string): string {
+  return KIND_LABELS[key] ?? key.replace(/_/g, ' ')
+}
 const SIZE = 660
 
 /**
@@ -61,6 +76,30 @@ export function Heatmaps() {
     queryFn: () => get<PlayerCard[]>('/players', { tracked: true }),
     staleTime: 5 * 60_000,
   })
+  // The server decides what it can draw. `/heatmap/kinds` returns the parser's
+  // own `KINDS` tuple, so an eighth kind appears here the moment it exists
+  // instead of accumulating bins nobody can see.
+  const kindQuery = useQuery({
+    queryKey: ['heatmap', 'kinds'],
+    queryFn: () => get<string[]>('/heatmap/kinds'),
+    staleTime: Infinity, // fixed for a given server build
+  })
+  const kinds = kindQuery.data ?? []
+  // Same source as the Strategy page's mode filter: the archive, not a
+  // hard-coded array that offers modes nobody plays and hides new ones.
+  const modeQuery = useQuery({
+    queryKey: ['modes', 'played'],
+    queryFn: () => get<string[]>('/modes/played'),
+    staleTime: 60 * 60_000,
+  })
+  const modes = modeQuery.data ?? []
+
+  // If the server ever drops the kind we are showing, fall back to its first
+  // rather than leaving a selection nothing can render. Guarded on a non-empty
+  // list so the initial load does not fight the default.
+  useEffect(() => {
+    if (kinds.length > 0 && !kinds.includes(kind)) setKind(kinds[0]!)
+  }, [kinds, kind])
   useEffect(() => {
     if (players.data) registerPlayers(players.data.map((p) => p.accountId))
   }, [players.data])
@@ -131,7 +170,7 @@ export function Heatmaps() {
 
         <select value={gameMode} onChange={(e) => setGameMode(e.target.value)}>
           <option value="">all modes</option>
-          {MODES.map((m) => <option key={m} value={m}>{m}</option>)}
+          {modes.map((m) => <option key={m} value={m}>{m}</option>)}
         </select>
 
         {!split && (
@@ -155,9 +194,9 @@ export function Heatmaps() {
       </div>
 
       <div className="seg">
-        {KINDS.map((k) => (
-          <button key={k.key} className={k.key === kind ? 'on' : ''} onClick={() => setKind(k.key)}>
-            {k.label}
+        {kinds.map((k) => (
+          <button key={k} className={k === kind ? 'on' : ''} onClick={() => setKind(k)}>
+            {kindLabel(k)}
           </button>
         ))}
       </div>

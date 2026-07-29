@@ -516,6 +516,35 @@ the browser on `/`, or the download wedges every shell on the box.
 It probes the deployed `dist/`, so **rebuild before probing** or you are testing
 the previous build and concluding things about code that is not running.
 
+## A hard-coded list of what the server supports goes stale silently
+
+Three pages carried their own copy of a server-side enumeration:
+`Heatmaps.tsx` hard-coded seven heatmap kinds while `/api/heatmap/kinds`
+returned them, and two pages hard-coded a six-entry `MODES` array. The failure
+is one-directional and quiet — an eighth kind would exist in the API,
+accumulate bins on every parse, and be invisible; a mode nobody plays is
+offered forever.
+
+Both now come from the server (`/heatmap/kinds`, `/modes/played`), and only the
+**display labels** stay in the frontend, with a fallback that prettifies an
+unknown key rather than dropping it. Appearing as `blue_damage` is a bad label;
+not appearing at all is a missing feature.
+
+## One scope, or a page that looks filtered and is not
+
+`api/deps.py`'s `MatchScope` (`?map=` / `?gameMode=`) is shared by every
+strategy aggregate. Before it, `/strategy/drops` had its own map picker and
+nothing else on the page was filtered — so a page showing Erangel drop clusters
+above Erangel-and-Miramar averages **looked filtered**, which is worse than
+having no filters at all.
+
+Two related traps live here. A React Query `queryKey` that omits the scope
+serves the unfiltered answer from cache while the page displays the filter. And
+`/strategy/drops` deliberately cannot honour "every map" — clustering pools
+coordinates, so two maps in one set puts Miramar drops inside Erangel towns; it
+keeps its own picker only when the page filter names no map, and hides it when
+one does, rather than leaving two controls to disagree.
+
 ## A rate about a subset means nothing without the rate about everything else
 
 **"61% of your deaths happened while you were outside the circle" is not a
